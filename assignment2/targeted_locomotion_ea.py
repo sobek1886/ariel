@@ -1,4 +1,4 @@
-# target_locomotion_ea.py
+# assignment2/targeted_locomotion_ea.py
 
 # Third-party libraries
 import argparse
@@ -17,7 +17,6 @@ from ariel.simulation.controllers.hopfs_cpg import HopfCPG
 from ariel.simulation.controllers.cpg_with_sensory_feedback import CPGSensoryFeedback
 from ariel.simulation.tasks.targeted_locomotion import distance_to_target_ff
 
-FLOOR_SIZE = (2,2,0.1)
 
 # -------------------------
 # Controllers
@@ -114,12 +113,12 @@ def show_qpos_history(history:list):
 # EA evaluation
 # -------------------------
 
-def evaluate(params, controller_name, steps=1000):
+def evaluate(params, controller_name, steps, floor_size, target_xy):
     global HISTORY
     HISTORY = []
 
     mujoco.set_mjcb_control(None)
-    world = SimpleFlatWorld(floor_size = FLOOR_SIZE)
+    world = SimpleFlatWorld(floor_size=floor_size)
     gecko_core = gecko()
     world.spawn(gecko_core.spec)
     model = world.spec.compile()
@@ -134,10 +133,10 @@ def evaluate(params, controller_name, steps=1000):
     for _ in range(steps):
         mujoco.mj_step(model, data)
 
-    return distance_to_target_ff([pos[:2] for pos in HISTORY], target_xy = (2,2))
+    return distance_to_target_ff([pos[:2] for pos in HISTORY], target_xy=target_xy)
 
 
-def evolve(controller_name, generations=5, popsize=8):
+def evolve(controller_name, generations, popsize, steps, floor_size, target_xy):
     if controller_name == "hopf":
         x0, sigma0 = [2*np.pi, 5.0, 0.1], 0.5
     elif controller_name == "feedback":
@@ -150,7 +149,7 @@ def evolve(controller_name, generations=5, popsize=8):
 
     for gen in range(generations):
         solutions = es.ask()
-        fitnesses = [-evaluate(s, controller_name) for s in solutions]  # CMA-ES minimizes
+        fitnesses = [-evaluate(s, controller_name, steps, floor_size, target_xy) for s in solutions]
         es.tell(solutions, fitnesses)
         print(f"Gen {gen}: best fitness = {-min(fitnesses):.4f}")
 
@@ -166,15 +165,15 @@ def evolve(controller_name, generations=5, popsize=8):
 # Main entry
 # -------------------------
 
-def main(controller_name, use_ea=False):
+def main(controller_name, use_ea, steps, floor_size, target_xy, generations, popsize):
     if use_ea and controller_name != "random":
-        best_params = evolve(controller_name, generations=50, popsize=8)
+        best_params = evolve(controller_name, generations, popsize, steps, floor_size, target_xy)
         print("Replay with best parameters...")
     else:
         best_params = None
 
     mujoco.set_mjcb_control(None)
-    world = SimpleFlatWorld(floor_size = FLOOR_SIZE)
+    world = SimpleFlatWorld(floor_size=floor_size)
     gecko_core = gecko()
     world.spawn(gecko_core.spec)
     model = world.spec.compile()
@@ -193,6 +192,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--controller", choices=CONTROLLERS.keys(), default="random")
     parser.add_argument("--evolve", action="store_true", help="Run CMA-ES before replay")
+    parser.add_argument("--steps", type=int, default=1000, help="Number of simulation steps")
+    parser.add_argument("--floor-size", type=float, nargs=3, default=(2, 2, 0.1),
+                        help="Floor size as 3 floats: width length thickness")
+    parser.add_argument("--target", type=float, nargs=2, default=(2.0, 2.0),
+                        help="Target position (x y)")
+    parser.add_argument("--generations", type=int, default=5, help="Number of generations for CMA-ES")
+    parser.add_argument("--popsize", type=int, default=8, help="Population size for CMA-ES")
+
     args = parser.parse_args()
 
-    main(args.controller, use_ea=args.evolve)
+    main(args.controller,
+         use_ea=args.evolve,
+         steps=args.steps,
+         floor_size=tuple(args.floor_size),
+         target_xy=tuple(args.target),
+         generations=args.generations,
+         popsize=args.popsize)
