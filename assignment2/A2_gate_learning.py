@@ -155,7 +155,7 @@ def main():
     
     # Initialise world
     # Import environments from ariel.simulation.environments
-    world = SimpleFlatWorld()
+    world = SimpleFlatWorld(floor_size = (2,2,0.1))
     #world = RuggedTerrainWorld()
     #world = PyramidWorld()
     #world = AmphitheatreTerrainWorld()
@@ -166,8 +166,8 @@ def main():
 
     # Spawn robot in the world
     # Check docstring for spawn conditions
-    #world.spawn(gecko_core.spec, spawn_position=[0, 0, 0])
     world.spawn(gecko_core.spec)
+    #world.spawn(gecko_core.spec)
 
     
     # Generate the model and data
