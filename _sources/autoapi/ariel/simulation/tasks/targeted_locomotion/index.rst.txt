@@ -1,0 +1,46 @@
+:py:mod:`targeted_locomotion`
+====================================================
+
+.. py:module:: ariel.simulation.tasks.targeted_locomotion
+
+
+Module Contents
+---------------
+
+
+Functions
+~~~~~~~~~
+
+.. autoapisummary::
+
+   ariel.simulation.tasks.targeted_locomotion.distance_to_target
+   ariel.simulation.tasks.targeted_locomotion.distance_to_target_ff
+
+
+
+.. py:function:: distance_to_target(initial_position, target_position)
+
+   Calculate the Euclidean distance between the current position and the target position.
+
+   :param initial_position: The current position as (x, y).
+   :type initial_position: :py:class:`tuple`
+   :param target_position: The target position as (x, y).
+   :type target_position: :py:class:`tuple`
+
+   :returns: The distance between the two positions.
+   :rtype: float
+
+
+.. py:function:: distance_to_target_ff(xy_history, target_xy=(2.0, 0.0)) -> float
+
+   Dense reward: reward the agent for moving closer to the target at each step.
+
+   :param xy_history: trajectory of robot positions.
+   :type xy_history: :py:class:`list of [x, y]`
+   :param target_xy: target position.
+   :type target_xy: :py:class:`tuple`
+
+   :returns: accumulated fitness over the trajectory.
+   :rtype: float
+
+
