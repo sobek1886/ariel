@@ -10,6 +10,7 @@ from ariel.ec.genotypes.nde import NeuralDevelopmentalEncoding
 from ariel.simulation.environments import OlympicArena
 
 from evolve_controller.evolve import run_controller_evolution
+from evolve_controller.config import infer_input_size, STATE_FEATURES
 import string, random
 
 # Where to save
@@ -19,7 +20,7 @@ DATA.mkdir(parents=True, exist_ok=True)
 NUM_OF_MODULES = 30
 SPAWN_POS = [-0.8, 0, 0.1]
 
-def generate_random_controller(input_size=None, output_size=None):
+def generate_random_controller(input_size=None, output_size=None, dest_dir=None):
     # --- 4. Generate dummy weights with correct shapes ---
     hidden_size = 8
     rng = np.random.default_rng(42)
@@ -33,14 +34,15 @@ def generate_random_controller(input_size=None, output_size=None):
         "w3": w3.tolist(),
     }
 
-    with open(DATA / "controller_weights.json", "w") as f:
+    with open(dest_dir / "controller.json", "w") as f:
         json.dump(weights, f)
 
-    print(f"✅ Saved robot genotype + graph + controller weights to {DATA}")
+    print(f"✅ Saved robot genotype + graph + controller weights to {dest_dir}")
 
 def main():
     # Pick a 9-letter random tag for model
     tag = ''.join(random.choice(string.ascii_lowercase) for _ in range(9))
+    tag = "test"
     dest_dir = DATA / tag
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,20 +73,23 @@ def main():
 
     # ✅ Build world + spawn robot (same as run_view)
     core = construct_mjspec_from_graph(robot_graph)
+    mj.set_mjcb_control(None)
     world = OlympicArena()
     world.spawn(core.spec, spawn_position=SPAWN_POS)
 
     model = world.spec.compile()
     data = mj.MjData(model)
+    mj.mj_resetData(model, data)
 
-    input_size = len(data.qpos)   # now matches run_view
     output_size = model.nu
+    print(f"Robot has {output_size} joints")
+    input_size = infer_input_size(num_joints=output_size, features=STATE_FEATURES)
 
     print(f"Robot built with {input_size} inputs and {output_size} outputs")
 
 
     # --- Generate random controller with correct sizes ---
-    # generate_random_controller(input_size=input_size, output_size=output_size)
+    # generate_random_controller(input_size=input_size, output_size=output_size, dest_dir=dest_dir)
     # exit(0)  # TEMPORARY EXIT TO SKIP EVOLUTION FOR NOW
 
     # --- 3. Evolve controller ---
@@ -92,8 +97,6 @@ def main():
     best_controller = run_controller_evolution(
         task="nav",
         robot_graph=robot_graph,
-        gens=2,      # smaller for quick test, use NUM_GENS for real
-        pop_size=5,
         dest_dir=dest_dir,
     )
 

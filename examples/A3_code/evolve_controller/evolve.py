@@ -3,33 +3,36 @@ from pathlib import Path
 import random, csv, string, json
 import numpy as np
 import matplotlib.pyplot as plt
-import mujoco
+import mujoco as mj
+import copy
 from deap import base, creator, tools, algorithms
 
-from ariel.simulation.environments.simple_flat_world import SimpleFlatWorld
+from ariel.simulation.environments import OlympicArena
+from ariel.utils.runners import simple_runner
+from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from fitness import distance_to_target   # 3D fitness
 
 from .config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
-    NUM_EVAL_STEPS, NUM_POP, NUM_GENS,
-    TARGET_POS, SPAWN_POS, infer_input_size, get_state_vector,
-    SAVE_MODELS, SAVE_PLOTS, SAVE_LOGS
+    NUM_POP, NUM_GENS,
+    TARGET_POS, SPAWN_POS, infer_input_size,
+    SAVE_MODELS, SAVE_PLOTS, SAVE_LOGS, DURATION
 )
-from .nn import build_controller, genome_length, decode_genome
+from .nn import build_controller, genome_length, decode_genome, make_controller_from_genome
 
-# === Global Debug Flag ===
 DEBUG_PROGRESS = True   # set to False for quiet runs
 
-# === Helpers ===
+
 def make_world():
-    return SimpleFlatWorld()
+    mj.set_mjcb_control(None)
+    return OlympicArena()
+
 
 def evaluate_genome(
     genome,
     *,
     task: str,
-    sim_steps: int,
     spawn_pos: tuple[float,float,float],
     robot_graph,
     target_pos: tuple[float,float,float] = TARGET_POS,
@@ -38,64 +41,74 @@ def evaluate_genome(
     core = construct_mjspec_from_graph(robot_graph)
     world.spawn(core.spec, spawn_position=list(spawn_pos))
     model = world.spec.compile()
-    data = mujoco.MjData(model)
+    data = mj.MjData(model)
+    mj.mj_resetData(model, data)
 
     num_joints = model.nu
-    input_size = infer_input_size(num_joints, STATE_FEATURES)
+    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
-    controller = build_controller(
-        genome, input_size, HIDDEN_SIZE, num_joints,
-        depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+    controller = make_controller_from_genome(
+        genome, num_joints,
+        tracker=tracker,
     )
 
-    pos_history: list[np.ndarray] = []
-    for _ in range(sim_steps):
-        state = get_state_vector(data, num_joints, STATE_FEATURES, target_pos=target_pos)
-        action = controller(state)
-        data.ctrl[:] = np.clip(action, -np.pi/2, np.pi/2)
-        mujoco.mj_step(model, data)
-        pos_history.append(data.qpos[:3].copy())   # track (x, y, z)
+    if controller.tracker is not None:
+        controller.tracker.setup(world.spec, data)
+
+    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+
+    simple_runner(model, data, duration=DURATION)
+
+    # ✅ use tracker history instead of manual traj
+    traj = np.array(tracker.history["xpos"][0])
 
     if task == "nav":
-        fitness = distance_to_target(pos_history, target_pos=target_pos)
+        fitness = distance_to_target(traj, target_pos=target_pos)
     else:
         raise ValueError(f"Unknown task {task!r}")
-    return (fitness,)  # DEAP expects tuple
+    return (fitness,)
 
-# === Debug print helper ===
-def debug_best_controller(genome, steps, robot_graph, spawn_pos, target_pos, label=""):
-    """Run best genome and print distances."""
+
+def debug_best_controller(genome, robot_graph, spawn_pos, target_pos, label=""):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
     world.spawn(core.spec, spawn_position=list(spawn_pos))
     model = world.spec.compile()
-    data = mujoco.MjData(model)
+    data = mj.MjData(model)
+    mj.mj_resetData(model, data)
 
     num_joints = model.nu
-    input_size = infer_input_size(num_joints, STATE_FEATURES)
-    controller = build_controller(
-        genome, input_size, HIDDEN_SIZE, num_joints,
-        depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+
+    controller = make_controller_from_genome(
+        genome, num_joints,
+        tracker=tracker,
     )
 
-    traj = []
-    for _ in range(steps):
-        state = get_state_vector(data, num_joints, STATE_FEATURES, target_pos=target_pos)
-        action = controller(state)
-        data.ctrl[:] = np.clip(action, -np.pi/2, np.pi/2)
-        mujoco.mj_step(model, data)
-        traj.append(data.qpos[:3].copy())
-    traj = np.array(traj)
+    if controller.tracker is not None:
+        controller.tracker.setup(world.spec, data)
+
+    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+
+    simple_runner(model, data, duration=DURATION)
+
+    # ✅ use tracker history
+    traj = np.array(tracker.history["xpos"][0])
 
     start, end = traj[0], traj[-1]
     path_len = np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1))
     dist_start = np.linalg.norm(start - np.array(target_pos))
     dist_end = np.linalg.norm(end - np.array(target_pos))
 
-    print(f"[DEBUG] {label} Path={path_len:.3f}, Start→Target={dist_start:.3f}, End→Target={dist_end:.3f}")
+    print(
+        f"[DEBUG] {label}: "
+        f"Path length traveled = {path_len:.3f}, "
+        f"Distance from start to target = {dist_start:.3f}, "
+        f"Final distance to target = {dist_end:.3f}"
+    )
 
-# === Plotting ===
-def plot_fitness(log, save_path: Path, pop: int, steps: int, task: str):
+
+def plot_fitness(log, save_path: Path, pop: int, task: str):
     gens = log.select("gen")
     avg = np.array(log.select("avg"))
     std = np.array(log.select("std"))
@@ -105,38 +118,42 @@ def plot_fitness(log, save_path: Path, pop: int, steps: int, task: str):
     plt.fill_between(gens, avg - std, avg + std, alpha=0.3, label="Std Dev")
     plt.plot(gens, maxv, label="Best Fitness")
     plt.xlabel("Generation"); plt.ylabel("Fitness")
-    plt.title(f"{task.upper()} evolution (pop={pop}, steps={steps})")
+    plt.title(f"{task.upper()} evolution (pop={pop}, duration={DURATION})")
     plt.legend(); plt.grid(True)
     plt.savefig(save_path); plt.close()
     if DEBUG_PROGRESS:
         print(f"Fitness plot saved to {save_path}")
 
+
 def plot_best_trajectory(
-    best_controller, robot_graph, steps, spawn_pos, plots_dir: Path,
-    target_pos: tuple[float,float,float] = (5.0,0.0,0.5),
+    genome, robot_graph, spawn_pos, plots_dir: Path,
+    target_pos: tuple[float,float,float] = TARGET_POS,
     out_name: str = "trajectory.png"
 ):
-    """Run the best controller and plot its 2D XY trajectory."""
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
     world.spawn(core.spec, spawn_position=list(spawn_pos))
     model = world.spec.compile()
-    data = mujoco.MjData(model)
+    data = mj.MjData(model)
+    mj.mj_resetData(model, data)
 
     num_joints = model.nu
-    _ = infer_input_size(num_joints, STATE_FEATURES)
+    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
-    traj = []
-    for _ in range(steps):
-        state = get_state_vector(
-            data, num_joints, STATE_FEATURES, target_pos=target_pos
-        ).astype(np.float32)
-        action = best_controller(state)
-        data.ctrl[:] = np.clip(action, -np.pi/2, np.pi/2)
-        mujoco.mj_step(model, data)
-        traj.append(data.qpos[:3].copy())
+    controller = make_controller_from_genome(
+        genome, num_joints,
+        tracker=tracker,
+    )
 
-    traj = np.array(traj)
+    if controller.tracker is not None:
+        controller.tracker.setup(world.spec, data)
+
+    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+
+    simple_runner(model, data, duration=DURATION)
+
+    # ✅ use tracker history
+    traj = np.array(tracker.history["xpos"][0])
 
     plt.figure(figsize=(8, 5))
     plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory")
@@ -151,11 +168,11 @@ def plot_best_trajectory(
     if DEBUG_PROGRESS:
         print(f"Trajectory plot saved to {out}")
 
+
 # === EA driver ===
 def run_controller_evolution(
     task: str,
     robot_graph,
-    steps: int = NUM_EVAL_STEPS,
     pop_size: int = NUM_POP,
     gens: int = NUM_GENS,
     seed: int | None = None,
@@ -208,7 +225,7 @@ def run_controller_evolution(
     toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=g_len)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
     toolbox.register(
-        "evaluate", evaluate_genome, task=task, sim_steps=steps,
+        "evaluate", evaluate_genome, task=task,
         spawn_pos=spawn_pos, robot_graph=robot_graph, target_pos=target_pos
     )
     toolbox.register("mate", tools.cxTwoPoint)
@@ -228,7 +245,7 @@ def run_controller_evolution(
 
     if DEBUG_PROGRESS:
         best_genome = np.array(hof[0])
-        debug_best_controller(best_genome, steps, robot_graph, spawn_pos, target_pos, label="Best Overall")
+        debug_best_controller(best_genome, robot_graph, spawn_pos, target_pos, label="Best Overall")
 
     model_path = None
 
@@ -241,7 +258,7 @@ def run_controller_evolution(
             print(f"Log saved to {csv_path}")
 
     if SAVE_PLOTS:
-        plot_fitness(log, plots_dir / f"plot_fitness.png", pop_size, steps, task)
+        plot_fitness(log, plots_dir / f"plot_fitness.png", pop_size, task)
 
     if SAVE_MODELS:
         # Decode for saving in a simple JSON structure
@@ -265,16 +282,20 @@ def run_controller_evolution(
             print(f"Controller weights saved to {controller_path}")
 
     best_genome = np.array(hof[0])
+
+    if SAVE_PLOTS:
+        plot_best_trajectory(
+            best_genome, robot_graph, spawn_pos, plots_dir,
+            target_pos=target_pos,
+            out_name=f"trajectory.png"
+        )
+
+    mj.set_mjcb_control(None)
+
     best_controller = build_controller(
         best_genome, input_size, HIDDEN_SIZE, num_joints,
         depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
     )
 
-    if SAVE_PLOTS:
-        plot_best_trajectory(
-            best_controller, robot_graph, steps, spawn_pos, plots_dir,
-            target_pos=target_pos,
-            out_name=f"trajectory.png"
-        )
 
     return best_controller

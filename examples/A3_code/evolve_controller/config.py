@@ -5,9 +5,9 @@ from typing import Iterable, Sequence, Tuple, Optional
 SPAWN_POS: Tuple[float, float, float] = (-0.8, 0.0, 0.1)
 TARGET_POS: Tuple[float, float, float] = (5.0, 0.0, 0.5)   # full 3D
 
-NUM_EVAL_STEPS = 2500
-NUM_POP = 200
-NUM_GENS = 50
+DURATION = 2
+NUM_POP = 10
+NUM_GENS = 3
 
 # ===== Feature set toggle =====
 # Can be "minimal" or "rich"
@@ -95,6 +95,5 @@ def get_state_vector(
         parts.append(data.subtree_com[0])    # global COM
         parts.append(data.qfrc_bias[:num_joints])     # bias forces per joint
         parts.append(data.qfrc_actuator[:num_joints]) # actuator forces per joint
-
 
     return np.concatenate([np.asarray(p, dtype=np.float32) for p in parts])
