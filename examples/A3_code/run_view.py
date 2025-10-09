@@ -17,7 +17,7 @@ from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
 from fitness import fitness_function
-from evolve_controller.config import get_state_vector, STATE_FEATURES, TARGET_POS, NN_DEPTH
+from evolve_controller.nn import make_controller_from_weights
 
 if TYPE_CHECKING:
     from networkx import DiGraph
@@ -51,6 +51,8 @@ def show_xpos_history(history: list[float]) -> None:
     world = OlympicArena()
     model = world.spec.compile()
     data = mj.MjData(model)
+    mj.mj_resetData(model, data)
+    
     save_path = str(DATA / "background.png")
     single_frame_renderer(
         model,
@@ -111,31 +113,7 @@ def show_xpos_history(history: list[float]) -> None:
 
     # plt.show()
 
-def nn_controller_with_weights(
-    model: mj.MjModel, data: mj.MjData, weights: dict[str, np.ndarray]
-) -> npt.NDArray[np.float64]:
-    num_joints = model.nu
-    inputs = get_state_vector(data, num_joints, STATE_FEATURES, target_pos=TARGET_POS)
-
-    if NN_DEPTH == 1:
-        w1, b1, w2, b2 = weights["w1"], weights["b1"], weights["w2"], weights["b2"]
-        h = np.tanh(np.dot(inputs, w1) + b1)
-        outputs = np.tanh(np.dot(h, w2) + b2)
-
-    elif NN_DEPTH == 2:
-        w1, b1 = weights["w1"], weights["b1"]
-        w2, b2 = weights["w2"], weights["b2"]
-        w3, b3 = weights["w3"], weights["b3"]
-        h1 = np.tanh(np.dot(inputs, w1) + b1)
-        h2 = np.tanh(np.dot(h1, w2) + b2)
-        outputs = np.tanh(np.dot(h2, w3) + b3)
-
-    else:
-        raise ValueError(f"Unsupported NN_DEPTH={NN_DEPTH}")
-
-    return outputs * (np.pi / 2)
-
-def experiment(robot: Any, controller: Controller, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
+def experiment(robot: Any, weights=None, tracker=None,duration: int = 15, mode: ViewerTypes = "viewer") -> None:
     mj.set_mjcb_control(None)
     world = OlympicArena()
     world.spawn(robot.spec, spawn_position=SPAWN_POS)
@@ -143,6 +121,9 @@ def experiment(robot: Any, controller: Controller, duration: int = 15, mode: Vie
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
+
+    num_joints = model.nu
+    controller = make_controller_from_weights(weights, num_joints, tracker=tracker)
 
     if controller.tracker is not None:
         controller.tracker.setup(world.spec, data)
@@ -162,7 +143,7 @@ def experiment(robot: Any, controller: Controller, duration: int = 15, mode: Vie
             viewer.launch(model=model, data=data)
 
 def main() -> None:
-    robot_dir = Path("__data__/saved_robots/yiadmofck")
+    robot_dir = Path("__data__/saved_robots/test")
 
     # --- Load saved robot graph ---
     with open(robot_dir / "robot_graph.json", "r") as f:
@@ -178,12 +159,8 @@ def main() -> None:
     print("DEBUG: Loaded graph has", len(robot_graph.nodes()), "nodes and", len(robot_graph.edges()), "edges")
     print("DEBUG: Loaded controller weight keys:", weights.keys())
 
-    ctrl = Controller(
-        controller_callback_function=lambda m, d: nn_controller_with_weights(m, d, weights),
-        tracker=tracker,
-    )
-
-    experiment(robot=core, controller=ctrl, mode="launcher")
+    # --- Run experiment ---
+    experiment(robot=core, weights=weights, tracker=tracker, mode="launcher")
 
     show_xpos_history(tracker.history["xpos"][0])
     fitness = fitness_function(tracker.history["xpos"][0])

@@ -1,5 +1,10 @@
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional
+from ariel.simulation.controllers.controller import Controller
+from .config import (
+    STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, TARGET_POS,
+    get_state_vector, infer_input_size
+)
 
 def _decode_1layer(genome: np.ndarray, input_size: int, hidden_size: int, output_size: int):
     """input -> hidden -> output"""
@@ -127,3 +132,90 @@ def genome_length(
         )
     else:
         raise ValueError(f"Unsupported depth={depth}. Use 1 or 2.")
+
+def make_controller_from_genome(
+    genome,
+    num_joints: int,
+    *,
+    target_pos=TARGET_POS,
+    record_pos: list[np.ndarray] | None = None,
+    ctrl_every: int = 1,
+    save_every: int = 1,
+    alpha: float = 1.0,
+    tracker=None,
+) -> Controller:
+    """
+    Wrap build_controller(genome, ...) into an Ariel Controller.
+    - record_pos: optional list to collect data.qpos[:3] each control step.
+    - ctrl_every/save_every=1 keeps identical behavior to old loop.
+    """
+    input_size = infer_input_size(num_joints, STATE_FEATURES)
+    action_fn = build_controller(
+        genome, input_size, HIDDEN_SIZE, num_joints,
+        depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+    )
+
+    def _callback(model, data):
+        state = get_state_vector(
+            data, num_joints, STATE_FEATURES, target_pos=target_pos
+        ).astype(np.float32)
+        if record_pos is not None:
+            record_pos.append(data.qpos[:3].copy())
+        return action_fn(state)
+
+    return Controller(
+        controller_callback_function=_callback,
+        time_steps_per_ctrl_step=ctrl_every,
+        time_steps_per_save=save_every,
+        alpha=alpha,
+        tracker=tracker,
+    )
+
+
+def make_controller_from_weights(
+    weights: dict[str, np.ndarray],
+    num_joints: int,
+    *,
+    target_pos=TARGET_POS,
+    record_pos: list[np.ndarray] | None = None,
+    ctrl_every: int = 1,
+    save_every: int = 1,
+    alpha: float = 1.0,
+    tracker=None,
+) -> Controller:
+    """
+    Make a Controller from saved weight matrices.
+    Supports depth=1 (w1,b1,w2,b2) and depth=2 (w1,b1,w2,b2,w3,b3).
+    """
+    w1 = weights["w1"]; b1 = weights.get("b1")
+    w2 = weights["w2"]; b2 = weights.get("b2")
+    w3 = weights.get("w3"); b3 = weights.get("b3")
+
+    def _forward(state: np.ndarray) -> np.ndarray:
+        # print(f"state shape: {state.shape}, w1 shape: {w1.shape}")
+        h1 = np.tanh(state @ w1 + (b1 if b1 is not None else 0))
+        if w3 is None:
+            out = np.tanh(h1 @ w2 + (b2 if b2 is not None else 0))
+        else:
+            h2 = np.tanh(h1 @ w2 + (b2 if b2 is not None else 0))
+            out = np.tanh(h2 @ w3 + (b3 if b3 is not None else 0))
+        return out * (np.pi / 2)
+
+    def _callback(model, data):
+        state = get_state_vector(
+            data, num_joints, STATE_FEATURES, target_pos=target_pos
+        ).astype(np.float32).copy()
+        # print("State vector:", state)
+        # print("infer_input_size:", infer_input_size(num_joints, STATE_FEATURES))
+        # print("actual state length:", len(get_state_vector(data, num_joints, STATE_FEATURES)))
+        if record_pos is not None:
+            record_pos.append(data.qpos[:3].copy())
+        return _forward(state)
+
+    return Controller(
+        controller_callback_function=_callback,
+        time_steps_per_ctrl_step=ctrl_every,
+        time_steps_per_save=save_every,
+        alpha=alpha,
+        tracker=tracker,
+    )
