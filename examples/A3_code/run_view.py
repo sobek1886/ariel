@@ -17,6 +17,7 @@ from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
 from fitness import fitness_function
+from evolve_controller.config import get_state_vector, STATE_FEATURES, TARGET_POS, NN_DEPTH
 
 if TYPE_CHECKING:
     from networkx import DiGraph
@@ -113,36 +114,26 @@ def show_xpos_history(history: list[float]) -> None:
 def nn_controller_with_weights(
     model: mj.MjModel, data: mj.MjData, weights: dict[str, np.ndarray]
 ) -> npt.NDArray[np.float64]:
-    inputs = data.qpos
-    w1, w2, w3 = weights["w1"], weights["w2"], weights["w3"]
+    num_joints = model.nu
+    inputs = get_state_vector(data, num_joints, STATE_FEATURES, target_pos=TARGET_POS)
 
-    # --- DEBUG PRINTS ---
-    # print("DEBUG: len(inputs) =", len(inputs))
-    # print("DEBUG: w1 shape =", w1.shape)
-    # print("DEBUG: w2 shape =", w2.shape)
-    # print("DEBUG: w3 shape =", w3.shape)
-    # print("DEBUG: model.nu (number of actuators) =", model.nu)
+    if NN_DEPTH == 1:
+        w1, b1, w2, b2 = weights["w1"], weights["b1"], weights["w2"], weights["b2"]
+        h = np.tanh(np.dot(inputs, w1) + b1)
+        outputs = np.tanh(np.dot(h, w2) + b2)
 
-    # If shapes don’t align, it will stop here instead of crashing
-    try:
-        layer1 = np.tanh(np.dot(inputs, w1))
-    except ValueError as e:
-        print("ERROR in layer1 dot product:", e)
-        raise
+    elif NN_DEPTH == 2:
+        w1, b1 = weights["w1"], weights["b1"]
+        w2, b2 = weights["w2"], weights["b2"]
+        w3, b3 = weights["w3"], weights["b3"]
+        h1 = np.tanh(np.dot(inputs, w1) + b1)
+        h2 = np.tanh(np.dot(h1, w2) + b2)
+        outputs = np.tanh(np.dot(h2, w3) + b3)
 
-    try:
-        layer2 = np.tanh(np.dot(layer1, w2))
-    except ValueError as e:
-        print("ERROR in layer2 dot product:", e)
-        raise
+    else:
+        raise ValueError(f"Unsupported NN_DEPTH={NN_DEPTH}")
 
-    try:
-        outputs = np.tanh(np.dot(layer2, w3))
-    except ValueError as e:
-        print("ERROR in layer3 dot product:", e)
-        raise
-
-    return outputs * np.pi
+    return outputs * (np.pi / 2)
 
 def experiment(robot: Any, controller: Controller, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
     mj.set_mjcb_control(None)
@@ -171,8 +162,10 @@ def experiment(robot: Any, controller: Controller, duration: int = 15, mode: Vie
             viewer.launch(model=model, data=data)
 
 def main() -> None:
+    robot_dir = Path("__data__/saved_robots/yiadmofck")
+
     # --- Load saved robot graph ---
-    with open("__data__/saved_robot/robot_graph.json", "r") as f:
+    with open(robot_dir / "robot_graph.json", "r") as f:
         graph_data = json.load(f)
     robot_graph = nx.node_link_graph(graph_data, edges="links")
     core = construct_mjspec_from_graph(robot_graph)
@@ -181,7 +174,7 @@ def main() -> None:
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
     # --- Load controller weights ---
-    weights = load_controller_weights(Path("__data__/saved_robot/controller_weights.json"))
+    weights = load_controller_weights(robot_dir / "controller.json")
     print("DEBUG: Loaded graph has", len(robot_graph.nodes()), "nodes and", len(robot_graph.edges()), "edges")
     print("DEBUG: Loaded controller weight keys:", weights.keys())
 

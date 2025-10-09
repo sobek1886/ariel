@@ -27,3 +27,30 @@ def fitness_function(history: List[List[float]]) -> float:
         (xt - xc) ** 2 + (yt - yc) ** 2 + (zt - zc) ** 2
     )
     return -cartesian_distance
+
+# From Assignment 2
+
+def distance_to_target(pos_history, target_pos=(5.0, 0.0, 0.5)) -> float:
+    """
+    Dense reward: reward the agent for moving closer to the 3D target at each step.
+
+    Args:
+        pos_history (list of [x, y, z]): trajectory of robot positions.
+        target_pos (tuple): 3D target position.
+
+    Returns:
+        float: accumulated fitness over the trajectory.
+    """
+    fitness = 0.0
+    for i in range(1, len(pos_history)):
+        prev = np.array(pos_history[i-1])
+        curr = np.array(pos_history[i])
+        prev_dist = np.linalg.norm(prev - np.array(target_pos))
+        curr_dist = np.linalg.norm(curr - np.array(target_pos))
+        fitness += (prev_dist - curr_dist)  # positive if moved closer
+
+    final_dist = np.linalg.norm(np.array(pos_history[-1]) - np.array(target_pos))
+    fitness += 1.0 / (1.0 + final_dist)  # closer → larger bonus
+
+    return fitness
+
