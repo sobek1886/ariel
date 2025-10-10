@@ -196,7 +196,7 @@ def plot_best_fitness_over_time(
     plt.plot(timesteps, fitness_finaldist, label="Final distance fitness", color="red", linestyle="--")
     plt.xlabel("Timestep")
     plt.ylabel("Fitness")
-    plt.title(f"Best Controller Fitness Progression (step={step})")
+    plt.title(f"Best Controller Fitness Progression (update={step})")
     plt.legend(); plt.grid(True)
 
     out = plots_dir / out_name
@@ -250,8 +250,6 @@ def plot_best_fitness_over_time_OG(
 
     if DEBUG_PROGRESS:
         print(f"Fitness over time plot saved to {out}")
-
-
 
 def tap_timer(timer_name: str = "Timer"):
     global is_timer, start_time
