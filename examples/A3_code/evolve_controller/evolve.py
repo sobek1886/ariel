@@ -142,7 +142,7 @@ def plot_best_fitness_over_time(
     genome, robot_graph, spawn_pos, plots_dir: Path,
     target_pos: tuple[float, float, float] = TARGET_POS,
     out_name: str = "fitness_over_time.png",
-    step: int = 250
+    step: int = 100
 ):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
@@ -203,6 +203,54 @@ def plot_best_fitness_over_time(
     plt.savefig(out); plt.close()
     if DEBUG_PROGRESS:
         print(f"Fitness-over-time plot saved to {out}")
+
+def plot_best_fitness_over_time_OG(
+    genome, robot_graph, spawn_pos, plots_dir: Path,
+    target_pos: tuple[float,float,float] = TARGET_POS,
+    out_name: str = "fitness_over_time.png"
+):
+    world = make_world()
+    core = construct_mjspec_from_graph(robot_graph)
+    world.spawn(core.spec, spawn_position=list(spawn_pos))
+    model = world.spec.compile()
+    data = mj.MjData(model)
+    mj.mj_resetData(model, data)
+
+    num_joints = model.nu
+    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+
+    controller = make_controller_from_genome(
+        genome, num_joints,
+        tracker=tracker,
+    )
+
+    if controller.tracker is not None:
+        controller.tracker.setup(world.spec, data)
+
+    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+
+    # Run sim
+    simple_runner(model, data, duration=DURATION)
+
+    # Use tracker history (positions over time)
+    traj = np.array(tracker.history["xpos"][0])
+
+    # Compute fitness at each timestep
+    fitness_values = [distance_to_target(traj[:i+1], target_pos=target_pos) for i in range(len(traj))]
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+    plt.plot(fitness_values, label="Fitness over time")
+    plt.xlabel("Timestep")
+    plt.ylabel("Fitness")
+    plt.title("Best Controller Fitness Progression")
+    plt.legend(); plt.grid(True)
+    out = plots_dir / out_name
+    plt.savefig(out); plt.close()
+
+    if DEBUG_PROGRESS:
+        print(f"Fitness over time plot saved to {out}")
+
 
 
 def tap_timer(timer_name: str = "Timer"):
@@ -306,7 +354,9 @@ def run_controller_evolution(
         stats=stats, halloffame=hof, verbose=DEBUG_PROGRESS
     )
     print(f"-------- End of Evolution --------")
+    print()
     tap_timer("Evolution")
+    print()
     print(f"-------- Best controller fitness: {hof[0].fitness.values[0]:.3f} --------")
 
     # Clean up pool

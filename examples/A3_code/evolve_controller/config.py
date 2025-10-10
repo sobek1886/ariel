@@ -5,9 +5,9 @@ from typing import Iterable, Sequence, Tuple, Optional
 SPAWN_POS: Tuple[float, float, float] = (-0.8, 0.0, 0.1)
 TARGET_POS: Tuple[float, float, float] = (5.0, 0.0, 0.5)   # full 3D
 
-DURATION = 60
-NUM_POP = 100
-NUM_GENS = 50
+DURATION = 30
+NUM_POP = 10
+NUM_GENS = 20
 
 # ===== Feature set toggle =====
 # Can be "minimal" or "rich"
