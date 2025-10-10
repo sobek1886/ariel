@@ -14,7 +14,7 @@ from evolve_controller.config import infer_input_size, STATE_FEATURES
 import string, random
 
 # Where to save
-DATA = Path.cwd() / "__data__" / "saved_robots"
+DATA = Path.cwd() / "__robot_data__" / "saved_robots"
 DATA.mkdir(parents=True, exist_ok=True)
 
 NUM_OF_MODULES = 30
@@ -42,7 +42,7 @@ def generate_random_controller(input_size=None, output_size=None, dest_dir=None)
 def main():
     # Pick a 9-letter random tag for model
     tag = ''.join(random.choice(string.ascii_lowercase) for _ in range(9))
-    tag = "test"
+    tag = "parallel_fast"
     dest_dir = DATA / tag
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,11 +82,7 @@ def main():
     mj.mj_resetData(model, data)
 
     output_size = model.nu
-    print(f"Robot has {output_size} joints")
     input_size = infer_input_size(num_joints=output_size, features=STATE_FEATURES)
-
-    print(f"Robot built with {input_size} inputs and {output_size} outputs")
-
 
     # --- Generate random controller with correct sizes ---
     # generate_random_controller(input_size=input_size, output_size=output_size, dest_dir=dest_dir)
