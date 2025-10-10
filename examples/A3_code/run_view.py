@@ -143,7 +143,7 @@ def experiment(robot: Any, weights=None, tracker=None,duration: int = 15, mode: 
             viewer.launch(model=model, data=data)
 
 def main() -> None:
-    robot_dir = Path("__data__/saved_robots/test")
+    robot_dir = Path("__robot_data__/saved_robots/test")
 
     # --- Load saved robot graph ---
     with open(robot_dir / "robot_graph.json", "r") as f:

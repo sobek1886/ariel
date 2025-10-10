@@ -5,13 +5,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mujoco as mj
 import copy
+import multiprocessing, os, time
 from deap import base, creator, tools, algorithms
 
 from ariel.simulation.environments import OlympicArena
 from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
-from fitness import distance_to_target   # 3D fitness
+from fitness import distance_to_target, fitness_function   # 3D fitness
 
 from .config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
@@ -22,12 +23,12 @@ from .config import (
 from .nn import build_controller, genome_length, decode_genome, make_controller_from_genome
 
 DEBUG_PROGRESS = True   # set to False for quiet runs
-
+is_timer = False
+start_time = 0.0
 
 def make_world():
     mj.set_mjcb_control(None)
     return OlympicArena()
-
 
 def evaluate_genome(
     genome,
@@ -69,46 +70,7 @@ def evaluate_genome(
     return (fitness,)
 
 
-def debug_best_controller(genome, robot_graph, spawn_pos, target_pos, label=""):
-    world = make_world()
-    core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(spawn_pos))
-    model = world.spec.compile()
-    data = mj.MjData(model)
-    mj.mj_resetData(model, data)
-
-    num_joints = model.nu
-    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
-
-    controller = make_controller_from_genome(
-        genome, num_joints,
-        tracker=tracker,
-    )
-
-    if controller.tracker is not None:
-        controller.tracker.setup(world.spec, data)
-
-    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
-
-    simple_runner(model, data, duration=DURATION)
-
-    # ✅ use tracker history
-    traj = np.array(tracker.history["xpos"][0])
-
-    start, end = traj[0], traj[-1]
-    path_len = np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1))
-    dist_start = np.linalg.norm(start - np.array(target_pos))
-    dist_end = np.linalg.norm(end - np.array(target_pos))
-
-    print(
-        f"[DEBUG] {label}: "
-        f"Path length traveled = {path_len:.3f}, "
-        f"Distance from start to target = {dist_start:.3f}, "
-        f"Final distance to target = {dist_end:.3f}"
-    )
-
-
-def plot_fitness(log, save_path: Path, pop: int, task: str):
+def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png"):
     gens = log.select("gen")
     avg = np.array(log.select("avg"))
     std = np.array(log.select("std"))
@@ -120,9 +82,7 @@ def plot_fitness(log, save_path: Path, pop: int, task: str):
     plt.xlabel("Generation"); plt.ylabel("Fitness")
     plt.title(f"{task.upper()} evolution (pop={pop}, duration={DURATION})")
     plt.legend(); plt.grid(True)
-    plt.savefig(save_path); plt.close()
-    if DEBUG_PROGRESS:
-        print(f"Fitness plot saved to {save_path}")
+    plt.savefig(dest_dir / out_name); plt.close()
 
 
 def plot_best_trajectory(
@@ -155,6 +115,18 @@ def plot_best_trajectory(
     # ✅ use tracker history
     traj = np.array(tracker.history["xpos"][0])
 
+    start, end = traj[0], traj[-1]
+    path_len = np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1))
+    dist_start = np.linalg.norm(start - np.array(target_pos))
+    dist_end = np.linalg.norm(end - np.array(target_pos))
+
+    print(
+        f"[DEBUG] trajectory: "
+        f"Path length traveled = {path_len:.3f}, "
+        f"Distance from start to target = {dist_start:.3f}, "
+        f"Final distance to target = {dist_end:.3f}"
+    )
+
     plt.figure(figsize=(8, 5))
     plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory")
     plt.scatter(traj[0,0], traj[0,1], c="g", marker="o", label="Start")
@@ -165,9 +137,84 @@ def plot_best_trajectory(
     plt.legend(); plt.grid(True)
     out = plots_dir / out_name
     plt.savefig(out); plt.close()
-    if DEBUG_PROGRESS:
-        print(f"Trajectory plot saved to {out}")
 
+def plot_best_fitness_over_time(
+    genome, robot_graph, spawn_pos, plots_dir: Path,
+    target_pos: tuple[float, float, float] = TARGET_POS,
+    out_name: str = "fitness_over_time.png",
+    step: int = 250
+):
+    world = make_world()
+    core = construct_mjspec_from_graph(robot_graph)
+    world.spawn(core.spec, spawn_position=list(spawn_pos))
+    model = world.spec.compile()
+    data = mj.MjData(model)
+    mj.mj_resetData(model, data)
+
+    num_joints = model.nu
+    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+
+    controller = make_controller_from_genome(
+        genome, num_joints,
+        tracker=tracker,
+    )
+
+    if controller.tracker is not None:
+        controller.tracker.setup(world.spec, data)
+
+    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+    simple_runner(model, data, duration=DURATION)
+
+    traj = np.array(tracker.history["xpos"][0])
+
+    fitness_dense = []
+    fitness_finaldist = []
+    total_dense = 0.0
+
+    for i in range(1, len(traj)):
+        prev, curr = traj[i-1], traj[i]
+        prev_dist = np.linalg.norm(prev - np.array(target_pos))
+        curr_dist = np.linalg.norm(curr - np.array(target_pos))
+
+        total_dense += (prev_dist - curr_dist)
+        # ✅ recompute bonus from *current last point* just like original
+        bonus = 1.0 / (1.0 + curr_dist)
+        dense_val = total_dense + bonus
+
+        final_val = -curr_dist
+
+        if i % step == 0 or i == len(traj) - 1:
+            fitness_dense.append(dense_val)
+            fitness_finaldist.append(final_val)
+
+    timesteps = [i for i in range(step, len(fitness_dense)*step+1, step)]
+    if len(timesteps) > len(fitness_dense):
+        timesteps = timesteps[:len(fitness_dense)]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(timesteps, fitness_dense, label="Dense fitness (distance_to_target)", color="blue")
+    plt.plot(timesteps, fitness_finaldist, label="Final distance fitness", color="red", linestyle="--")
+    plt.xlabel("Timestep")
+    plt.ylabel("Fitness")
+    plt.title(f"Best Controller Fitness Progression (step={step})")
+    plt.legend(); plt.grid(True)
+
+    out = plots_dir / out_name
+    plt.savefig(out); plt.close()
+    if DEBUG_PROGRESS:
+        print(f"Fitness-over-time plot saved to {out}")
+
+
+def tap_timer(timer_name: str = "Timer"):
+    global is_timer, start_time
+    if not is_timer:
+        start_time = time.time()
+        is_timer = True
+    else:
+        total_time = time.time() - start_time
+        print(f"--- {timer_name} timer took: {total_time:.2f} sec ---")
+        start_time = 0.0
+        is_timer = False
 
 # === EA driver ===
 def run_controller_evolution(
@@ -183,6 +230,15 @@ def run_controller_evolution(
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
 
+    print(f"------ Evolution parameters ------")
+    print(f"Population size: {pop_size}")
+    print(f"Number of generations: {gens}")
+    print(f"Duration per evaluation: {DURATION} sec")
+    print(f"Seed: {seed}")
+    print(f"Spawn position: {spawn_pos}")
+    print(f"Target position: {target_pos}")
+    print(f"Destination directory: {dest_dir}")
+    print(f"----------------------------------")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     plots_dir = dest_dir / "plots"
@@ -238,28 +294,38 @@ def run_controller_evolution(
     stats = tools.Statistics(lambda ind: ind.fitness.values[0])
     stats.register("avg", np.mean); stats.register("std", np.std); stats.register("max", np.max)
 
+    # === Parallelism setup ===
+    n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", multiprocessing.cpu_count()))
+    pool = multiprocessing.Pool(n_cpus)
+    toolbox.register("map", pool.map)
+
+    # === Evolution loop with timing ===
+    tap_timer("Evolution")
     pop, log = algorithms.eaSimple(
         pop, toolbox, cxpb=0.5, mutpb=0.3, ngen=gens,
         stats=stats, halloffame=hof, verbose=DEBUG_PROGRESS
     )
+    print(f"-------- End of Evolution --------")
+    tap_timer("Evolution")
+    print(f"-------- Best controller fitness: {hof[0].fitness.values[0]:.3f} --------")
 
-    if DEBUG_PROGRESS:
-        best_genome = np.array(hof[0])
-        debug_best_controller(best_genome, robot_graph, spawn_pos, target_pos, label="Best Overall")
+    # Clean up pool
+    pool.close()
+    pool.join()
 
-    model_path = None
+    # === Save results ===
 
+    tap_timer("Save logs")
     if SAVE_LOGS:
         csv_path = plots_dir / f"log.csv"
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f); w.writerow(["gen","avg","std","max"])
             for rec in log: w.writerow([rec["gen"], rec["avg"], rec["std"], rec["max"]])
-        if DEBUG_PROGRESS:
-            print(f"Log saved to {csv_path}")
+            
+        print(f"    [1/5] Log saved to {csv_path}")
+    tap_timer("Save logs")
 
-    if SAVE_PLOTS:
-        plot_fitness(log, plots_dir / f"plot_fitness.png", pop_size, task)
-
+    tap_timer("Save controller")
     if SAVE_MODELS:
         # Decode for saving in a simple JSON structure
         if NN_DEPTH == 1:
@@ -278,17 +344,35 @@ def run_controller_evolution(
         controller_path = dest_dir / f"controller.json"
         with open(controller_path, "w") as f:
             json.dump(weights, f)
-        if DEBUG_PROGRESS:
-            print(f"Controller weights saved to {controller_path}")
+            
+        print(f"    [2/5] Controller weights saved to {controller_path}")
+    tap_timer("Save controller")
 
     best_genome = np.array(hof[0])
 
     if SAVE_PLOTS:
+        tap_timer("Save fitness plot")
+        plot_fitness(log, plots_dir, pop_size, task, out_name="plot_fitness_generations.png")
+        print(f"    [3/5] Fitness plot saved to {plots_dir / f'plot_fitness_generations.png'}")
+        tap_timer("Save fitness plot")
+
+        tap_timer("Save trajectory plot")
         plot_best_trajectory(
             best_genome, robot_graph, spawn_pos, plots_dir,
             target_pos=target_pos,
             out_name=f"trajectory.png"
         )
+        print(f"    [4/5] Trajectory plot saved to {plots_dir / f'trajectory.png'}")
+        tap_timer("Save trajectory plot")
+
+        tap_timer("Save fitness over time plot")
+        plot_best_fitness_over_time(
+            best_genome, robot_graph, spawn_pos, plots_dir,
+            target_pos=target_pos,
+            out_name="fitness_over_time.png"
+        )
+        print(f"    [5/5] Fitness over time plot saved to {plots_dir / f'fitness_over_time.png'}")
+        tap_timer("Save fitness over time plot")
 
     mj.set_mjcb_control(None)
 
@@ -296,6 +380,5 @@ def run_controller_evolution(
         best_genome, input_size, HIDDEN_SIZE, num_joints,
         depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
     )
-
 
     return best_controller
