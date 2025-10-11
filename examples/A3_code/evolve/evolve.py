@@ -238,7 +238,7 @@ def evaluate_robot(bot: Robot):
 
         # Simulate
         traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph)
-        disp = np.linalg.norm(traj[-1, :2] - traj[0, :2])
+        disp = np.linalg.norm(traj[-1, [0, 1]] - traj[0, [0, 1]])
 
         # print(f"  displacement = {disp:.3f} m")
         # print("-----------------------------")
@@ -381,7 +381,10 @@ def run_evolve_robot(
             print("---------------------------")
 
         if SAVE_PLOTS:
-            plot_best_trajectory(best.ctrl, best.body_graph, plots_dir)
+            gen_dir = plots_dir / f"generations"
+            gen_dir.mkdir(parents=True, exist_ok=True)
+
+            plot_best_trajectory(best.ctrl, best.body_graph, gen_dir, out_name=f"trajectory_{gen}.png")
 
         avg_fit = np.mean([b.fitness[0] for b in pop])
         best_fit = np.max([b.fitness[0] for b in pop])
