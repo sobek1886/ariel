@@ -16,10 +16,10 @@ from ariel.utils.renderers import single_frame_renderer, video_renderer
 from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
-from examples.A3_code.evolve.fitness import fitness_function, distance_to_target
 from examples.A3_code.evolve.nn import make_controller_from_weights
+from examples.A3_code.evolve.fitness import olympic_arena_fitness
 from examples.A3_code.evolve.config import DATA_PATH, SPAWN_POS, TARGET_POS, TASK
-from examples.A3_code.evolve.utils import load_robot
+from examples.A3_code.evolve.utils import load_robot, plot_best_trajectory, plot_best_fitness_over_time
 
 if TYPE_CHECKING:
     from networkx import DiGraph
@@ -159,14 +159,28 @@ def main() -> None:
     # --- Run experiment ---
     experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
 
-    history = tracker.history["xpos"][0]
+    history = olympic_arena_fitness(tracker.history["xpos"][0])
     show_xpos_history(history)
-    
-    if TASK.lower() == "nav":
-        fitness = distance_to_target(history)
-    else:
-        fitness = fitness_function(history)
+
+    fitness = olympic_arena_fitness(history)
     console.log(f"Fitness of generated robot: {fitness}")
+
+    # Debug fitness with plots
+    debug_dir = DATA_PATH / f"debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    genome = []
+    genome.extend(np.ravel(controller_weights["w1"]))
+    genome.extend(controller_weights["b1"])
+    genome.extend(np.ravel(controller_weights["w2"]))
+    genome.extend(controller_weights["b2"])
+    genome.extend(np.ravel(controller_weights["w3"]))
+    genome.extend(controller_weights["b3"])
+
+    plot_best_trajectory(genome, robot_graph, debug_dir)
+    plot_best_fitness_over_time(genome, robot_graph, debug_dir)
+
+    print(f"Last pos: {history[-1]}")
 
 if __name__ == "__main__":
     main()
