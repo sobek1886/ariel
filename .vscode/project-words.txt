@@ -79,6 +79,7 @@ bkp
 BKSP
 BLE
 BODYBVH
+bodyid
 bodyname
 Bongard
 booktitle
@@ -111,6 +112,7 @@ chapterpage
 charliermarsh
 charx
 charxstring
+chisquare
 cibuildwheel
 cibw
 CIBW
@@ -181,14 +183,18 @@ dataclasses
 datetimez
 dateutil
 DCONFIG
+deap
 debateable
 debugpy
 deemphasized
 deepcopy
 defenses
 deflist
+defusedxml
 Deniz
 devcontainers
+dfden
+dfnum
 dialog
 dib
 directsearch
@@ -260,6 +266,7 @@ figsize
 filelock
 FILTEREXACT
 firsthead
+fitaabb
 fixedcamid
 FLEXBVH
 FLEXEDGE
@@ -314,7 +321,9 @@ gprof
 Graphviz
 Grégoire
 Grigoriadis
+gumbel
 Guszti
+Hammersley
 hammerspoon
 hasattr
 hashlib
@@ -388,6 +397,7 @@ jpf
 jpm
 jpx
 jsburckhardt
+jsonschema
 jupyter
 jxr
 Karine
@@ -440,6 +450,7 @@ libncurses
 libosmesa
 libpango
 libreadline
+libsass
 libsm
 libsqlite
 libx
@@ -466,7 +477,9 @@ lmr
 lnk
 loc
 logfilewarninglist
+lognormal
 logscale
+logseries
 longtable
 longtblr
 lookat
@@ -479,6 +492,7 @@ lualatex
 luo
 Luo
 LWR
+lxml
 Maesani
 MAPCMA
 mapfiles
@@ -539,6 +553,7 @@ mypycify
 myst
 nala
 Nala
+nbad
 nbody
 nbsphinx
 nbvh
@@ -554,6 +569,7 @@ newfigname
 newpxtext
 newtablename
 ngeom
+ngood
 nicegui
 Nikolaus
 njpwerner
@@ -563,6 +579,8 @@ nodeeditor
 nodeenv
 nodeid
 nohyp
+nonc
+noncentral
 noncommercially
 nonconvex
 nonstopmode
@@ -579,6 +597,7 @@ npt
 NPY
 nrow
 nrows
+nsample
 nsmallest
 nstep
 Num
@@ -614,6 +633,7 @@ Perflint
 Perlin
 PERTFORCE
 PERTOBJ
+pexpect
 pgfkeys
 pgfplots
 PGH
@@ -626,15 +646,19 @@ PLR
 plt
 pnoise
 podman
+polyfit
 polyglossia
+polyval
 Popen
 posargs
 powerline
 Pradeep
 PRCNT
+pred
 preto
 prg
 printanswers
+printoptions
 prnt
 prob
 propcache
@@ -642,6 +666,7 @@ protogen
 Przemyslaw
 pstats
 PTH
+pvals
 PWR
 pybind
 pybuilder
@@ -760,6 +785,8 @@ sigstore
 Sigstore
 simp
 siunitx
+skipsensor
+skipstage
 SLF
 slvs
 smam
@@ -812,6 +839,7 @@ talltblr
 tamasfe
 tasklist
 tblr
+TBPSA
 testmod
 testpypi
 texlive
@@ -850,6 +878,7 @@ typeguard
 typehints
 typeshed
 Tyrrell
+ujson
 underfull
 Underglow
 UNDERGLOW
@@ -868,6 +897,7 @@ Ver
 viridis
 virtualenv
 vmap
+vonmises
 Vrije
 vsc
 Vytas
@@ -887,12 +917,14 @@ xdoctest
 xindy
 xlabel
 xlim
+xlrd
 xmat
 xpos
 xshift
 xspace
 xticks
 xunicode
+xyaxes
 xyflow
 xyzw
 yarl
@@ -908,6 +940,7 @@ Zeeuwe
 Zeina
 zenodo
 Zenodo
+zipf
 zipp
 zmax
 zmin

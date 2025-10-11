@@ -1,8 +1,12 @@
-import numpy as np
+"""Targeted locomotion."""
 
-def distance_to_target(initial_position, target_position):
-     """
-     Calculate the Euclidean distance between the current position and the target position.
+
+def distance_to_target(
+    initial_position: tuple[float, float],
+    target_position: tuple[float, float],
+) -> float:
+    """
+    Euclidean distance between the current position and the target position.
 
      Args:
          initial_position (tuple): The current position as (x, y).
