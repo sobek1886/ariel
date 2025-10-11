@@ -10,9 +10,19 @@ from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from examples.A3_code.evolve.fitness import distance_to_target
-from examples.A3_code.evolve.nn import make_controller_from_genome, decode_genome, build_controller
-from examples.A3_code.evolve.config import DURATION, TARGET_POS, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH
+from examples.A3_code.evolve.nn import make_controller_from_genome, decode_genome, build_controller, infer_input_size
+from examples.A3_code.evolve.config import DURATION, SPAWN_POS, TARGET_POS, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, STATE_FEATURES
 
+def count_num_joints(robot_graph):
+    """Calculates number of joints directly from a NetworkX DiGraph."""
+    if not hasattr(robot_graph, "nodes"):
+        raise TypeError(f"Expected NetworkX graph, got {type(robot_graph)}")
+
+    # Now count nodes of type "HINGE"
+    hinge_count = sum(1 for _, attrs in robot_graph.nodes(data=True)
+                      if attrs.get("type") == "HINGE")
+
+    return hinge_count
 
 def make_world():
     mj.set_mjcb_control(None)
@@ -20,10 +30,10 @@ def make_world():
     return world
 
 # === Helper: run_simulation (reuses common setup) ===
-def run_simulation(genome, robot_graph, spawn_pos):
+def run_simulation(genome, robot_graph):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(spawn_pos))
+    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
@@ -54,10 +64,10 @@ def save_log_csv(log, csv_path: Path):
 
 # === Plotting ===
 def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png"):
-    gens = log.select("gen")
-    avg = np.array(log.select("avg"))
-    std = np.array(log.select("std"))
-    maxv = np.array(log.select("max"))
+    gens = [rec["gen"] for rec in log]
+    avg  = np.array([rec["avg"] for rec in log])
+    std  = np.array([rec["std"] for rec in log])
+    maxv = np.array([rec["max"] for rec in log])
     plt.figure(figsize=(10, 6))
     plt.plot(gens, avg, label="Average Fitness")
     plt.fill_between(gens, avg - std, avg + std, alpha=0.3, label="Std Dev")
@@ -69,22 +79,21 @@ def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot
 
 
 def plot_best_trajectory(
-    genome, robot_graph, spawn_pos, plots_dir: Path,
-    target_pos: tuple[float,float,float] = TARGET_POS,
+    genome, robot_graph, plots_dir: Path,
     out_name: str = "trajectory.png"
 ):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph, spawn_pos)
+    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
     start, end = traj[0], traj[-1]
     path_len = np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1))
-    dist_start = np.linalg.norm(start - np.array(target_pos))
-    dist_end = np.linalg.norm(end - np.array(target_pos))
+    dist_start = np.linalg.norm(start - np.array(TARGET_POS))
+    dist_end = np.linalg.norm(end - np.array(TARGET_POS))
     print(f"[DEBUG] trajectory: Path={path_len:.3f}, StartDist={dist_start:.3f}, EndDist={dist_end:.3f}")
 
     plt.figure(figsize=(8, 5))
     plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory")
     plt.scatter(traj[0,0], traj[0,1], c="g", marker="o", label="Start")
     plt.scatter(traj[-1,0], traj[-1,1], c="r", marker="x", label="End")
-    plt.scatter(target_pos[0], target_pos[1], c="k", marker="*", label="Target (XY)")
+    plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XY)")
     plt.xlabel("X"); plt.ylabel("Y")
     plt.title("Best Controller Trajectory (XY projection)")
     plt.legend(); plt.grid(True)
@@ -92,18 +101,17 @@ def plot_best_trajectory(
 
 
 def plot_best_fitness_over_time(
-    genome, robot_graph, spawn_pos, plots_dir: Path,
-    target_pos: tuple[float, float, float] = TARGET_POS,
+    genome, robot_graph, plots_dir: Path,
     out_name: str = "fitness_over_time.png",
     step: int = 100
 ):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph, spawn_pos)
+    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
     fitness_dense, fitness_finaldist, total_dense = [], [], 0.0
 
     for i in range(1, len(traj)):
         prev, curr = traj[i-1], traj[i]
-        prev_dist = np.linalg.norm(prev - np.array(target_pos))
-        curr_dist = np.linalg.norm(curr - np.array(target_pos))
+        prev_dist = np.linalg.norm(prev - np.array(TARGET_POS))
+        curr_dist = np.linalg.norm(curr - np.array(TARGET_POS))
         total_dense += (prev_dist - curr_dist)
         bonus = 1.0 / (1.0 + curr_dist)
         dense_val = total_dense + bonus
@@ -127,11 +135,10 @@ def plot_best_fitness_over_time(
 
 
 def plot_best_fitness_over_time_OG(
-    genome, robot_graph, spawn_pos, plots_dir: Path,
-    target_pos: tuple[float,float,float] = TARGET_POS,
+    genome, robot_graph, plots_dir: Path,
     out_name: str = "fitness_over_time.png"
 ):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph, spawn_pos)
+    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
     fitness_values = [distance_to_target(traj[:i+1]) for i in range(len(traj))]
     plt.figure(figsize=(8, 5))
     plt.plot(fitness_values, label="Fitness over time")
@@ -165,11 +172,16 @@ def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints):
     print(f"Saved robot to {robot_path}")
 
 
-def load_robot(path: Path, input_size, num_joints):
-    with open(path, "r") as f:
+def load_robot(dir_path: Path):
+    robot_path = dir_path / "robot.json"
+    with open(robot_path, "r") as f:
         data = json.load(f)
     robot_graph = nx.node_link_graph(data["graph"], edges="links")
-    controller_data = data["controller"]
-    controller = build_controller(controller_data, input_size, HIDDEN_SIZE, num_joints,
-                                  depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
-    return robot_graph, controller
+    controller_weights = data["controller"]
+
+    # num_joints = count_num_joints(robot_graph)
+    # input_size = infer_input_size(num_joints, STATE_FEATURES)
+
+    # controller = build_controller(controller_data, input_size, HIDDEN_SIZE, num_joints,
+    #                               depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
+    return robot_graph, controller_weights
