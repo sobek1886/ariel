@@ -18,7 +18,7 @@ NUM_GENS = 5
 STATE_SET = "rich"
 TASK = "nav"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots"
+DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "co_evo_run"
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"
@@ -36,7 +36,6 @@ NN_DEPTH: int = 2
 HIDDEN_SIZE: int = 64
 HIDDEN_SIZE2: Optional[int] = 32 if NN_DEPTH == 2 else None
 
-SAVE_MODELS = True
 SAVE_PLOTS = True
 SAVE_LOGS = True
 

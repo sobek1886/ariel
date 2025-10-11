@@ -10,12 +10,12 @@ from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from ariel.body_phenotypes.robogen_lite.decoders.hi_prob_decoding import HighProbabilityDecoder
 from ariel.ec.genotypes.nde import NeuralDevelopmentalEncoding
-from examples.A3_code.evolve.fitness import distance_to_target
+from examples.A3_code.evolve.fitness import distance_to_target, fitness_function
 
 from examples.A3_code.evolve.config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
     NUM_POP, NUM_GENS, TARGET_POS, SPAWN_POS,
-    SAVE_MODELS, SAVE_PLOTS, SAVE_LOGS, DURATION,
+    SAVE_PLOTS, SAVE_LOGS, DURATION,
     DEBUG_PROGRESS, GENOTYPE_SIZE, NUM_OF_MODULES,
     BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE
 )
@@ -23,7 +23,7 @@ from examples.A3_code.evolve.nn import genome_length, make_controller_from_genom
 from examples.A3_code.evolve.utils import (
     make_world, plot_fitness,
     plot_best_trajectory, plot_best_fitness_over_time,
-    save_log_csv, save_robot
+    save_log_csv, save_robot, count_num_joints
 )
 
 timers = {}
@@ -73,14 +73,19 @@ class Robot:
         self.body = body_genes
         self.body_graph = decode_body(body_genes)  # decode once on creation
         self.ctrl = ctrl_genes
-        self.num_joints = None
-        self.input_size = None
+        self.num_joints = count_num_joints(self.body_graph)
+        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
         self.fitness = (-999.0,)
         self.prev_num_joints = None
         self.limb_history = []  # record num_joints across evaluations
         self.mutation_count = 0
         self.gen_created = 0  # for tracking when it appeared
         self.disp = 0.0
+
+    def update_body(self):
+        self.body_graph = decode_body(self.body)
+        self.num_joints = count_num_joints(self.body_graph)
+        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
 
     def clone(self):
         c = Robot(self.body.copy(), self.ctrl.copy())
@@ -101,6 +106,8 @@ class Robot:
         c.gen_created = self.gen_created
         c.disp = self.disp
         c.body_graph = self.body_graph  # keep cached body
+        c.num_joints = self.num_joints
+        c.input_size = self.input_size
         return c
 
     def record_limb_count(self, num_joints: int):
@@ -108,7 +115,7 @@ class Robot:
         if self.prev_num_joints is None:
             self.prev_num_joints = num_joints
         elif self.prev_num_joints != num_joints:
-            print(f"[LIMB CHANGE] Robot {self.id} changed limbs: {self.prev_num_joints} → {num_joints}")
+            # print(f"[LIMB CHANGE] Robot {self.id} changed limbs: {self.prev_num_joints} → {num_joints}")
             self.prev_num_joints = num_joints
         self.limb_history.append(num_joints)
 
@@ -116,45 +123,26 @@ class Robot:
         return (f"Robot {self.id}.{getattr(self, 'clone_num', 0)} | "
                 f"fitness={self.fitness[0]:.1f} | "
                 f"mutations={self.mutation_count} | "
-                f"limbs={self.prev_num_joints} | "
+                f"limbs={self.num_joints} | "
                 f"input_size={self.input_size} | "
                 f"evaluations={len(self.limb_history)} | "
                 f"disp={self.disp:.1f}")
 
-def estimate_num_joints(robot_graph):
-    """Estimate number of joints directly from a NetworkX DiGraph."""
-    if not hasattr(robot_graph, "nodes"):
-        raise TypeError(f"Expected NetworkX graph, got {type(robot_graph)}")
-
-    # Print a few nodes to see what the attributes look like
-    print(f"Nodes with data:")
-    for node_id, attrs in list(robot_graph.nodes(data=True))[:5]:
-        print(f"  node {node_id}: {attrs}")
-
-    # Now count nodes of type "HINGE"
-    hinge_count = sum(1 for _, attrs in robot_graph.nodes(data=True)
-                      if attrs.get("type") == "HINGE")
-
-    print(f"Estimated joints: {hinge_count}")
-    return hinge_count
-
 # ===============================================================
 # SIMULATION
 # ===============================================================
-def run_simulation(ctrl_genes, robot_graph, spawn_pos):
+def run_simulation(ctrl_genes, robot_graph):
     """Build world, run simulation, return trajectory and model data."""
     mj.set_mjcb_control(None)
     world = OlympicArena()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(spawn_pos))
+    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
 
 
     num_joints = model.nu
-    print(f"DEBUG: correct number of limbs: {num_joints}")
-    print(f"DEBUG: estimate: {estimate_num_joints(robot_graph)}")
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
     controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
     if controller.tracker is not None:
@@ -204,16 +192,18 @@ def mutate_robot(bot: Robot):
 
     if is_mutate:
         # After mutating the body, rebuild the morphology
-        print(f"[MUTATION] Robot {bot.id}.{getattr(bot, 'clone_num', 0)} body mutated, rebuilding morphology.")
+        # print(f"[MUTATION] Robot {bot.id}.{getattr(bot, 'clone_num', 0)} body mutated, rebuilding morphology.")
         bot.mutation_count += 1
-        bot.body_graph = decode_body(bot.body)
+        # print(f"    HAD limbs: {bot.num_joints} and input_size: {bot.input_size}")
+        bot.update_body()
+        # print(f"        NOW limbs: {bot.num_joints} and input_size: {bot.input_size}")
 
     return bot
 
 # ===============================================================
 # EVALUATION
 # ===============================================================
-def evaluate_robot(bot: Robot, spawn_pos, target_pos):
+def evaluate_robot(bot: Robot):
     """Evaluate fitness with dynamic controller adjustment."""
     try:
         robot_graph = bot.body_graph  # use cached graph
@@ -221,7 +211,7 @@ def evaluate_robot(bot: Robot, spawn_pos, target_pos):
         # Build temporary model to check joint count
         tmp_world = make_world()
         core = construct_mjspec_from_graph(robot_graph)
-        tmp_world.spawn(core.spec, spawn_position=list(spawn_pos))
+        tmp_world.spawn(core.spec, spawn_position=list(SPAWN_POS))
         tmp_model = tmp_world.spec.compile()
         num_joints = tmp_model.nu
 
@@ -232,32 +222,35 @@ def evaluate_robot(bot: Robot, spawn_pos, target_pos):
                                     depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
 
         # --- DEBUG PRINTS ---
-        print(f"\n[DEBUG] Robot evaluation info robot: {bot.id}")
-        print(f"  num_joints = {num_joints}")
-        print(f"  input_size = {input_size}")
-        print(f"  required_len = {required_len}")
-        print(f"  current_ctrl_len = {len(bot.ctrl)}")
-        print(f"  BODY_GENE_LENGTH = {BODY_GENE_LENGTH}")
-        print(f"  GENOTYPE_SIZE = {GENOTYPE_SIZE}")
-        print(f"  NUM_OF_MODULES = {NUM_OF_MODULES}")
+        # print(f"\n[DEBUG] Robot evaluation info robot: {bot.id}")
+        # print(f"  num_joints = {num_joints}")
+        # print(f"  input_size = {input_size}")
+        # print(f"  required_len = {required_len}")
+        # print(f"  current_ctrl_len = {len(bot.ctrl)}")
+        # print(f"  BODY_GENE_LENGTH = {BODY_GENE_LENGTH}")
+        # print(f"  GENOTYPE_SIZE = {GENOTYPE_SIZE}")
+        # print(f"  NUM_OF_MODULES = {NUM_OF_MODULES}")
         
         ctrl_genes = bot.ctrl
         if len(bot.ctrl) != required_len:
             ctrl_genes = [random.uniform(-1.0, 1.0) for _ in range(required_len)]
-            print(f"  Resized controller = {len(ctrl_genes)}")
+            # print(f"  Resized controller = {len(ctrl_genes)}")
 
         # Simulate
-        traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph, spawn_pos)
+        traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph)
         disp = np.linalg.norm(traj[-1, :2] - traj[0, :2])
 
-        print(f"  displacement = {disp:.3f} m")
-        print("-----------------------------")
+        # print(f"  displacement = {disp:.3f} m")
+        # print("-----------------------------")
         
         # Compute fitness
         if disp < IMMOBILE_THRESH:
             fitness = -999.0  # immobile
         else:
-            fitness = distance_to_target(traj)
+            if TASK.lower() == "nav":
+                fitness = distance_to_target(traj)
+            else:
+                fitness = fitness_function(traj)
 
         # Return all data needed for updating bot in main process
         return {
@@ -269,8 +262,6 @@ def evaluate_robot(bot: Robot, spawn_pos, target_pos):
         }
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         print(f"[!] Robot evaluation failed: {e}")
         return {
             'fitness': -999.0,
@@ -280,10 +271,9 @@ def evaluate_robot(bot: Robot, spawn_pos, target_pos):
             'ctrl_genes': bot.ctrl
         }
 
-def _eval_robot_helper(args):
+def _eval_robot_helper(bot):
     """Helper wrapper for multiprocessing pool.map."""
-    bot, spawn_pos, target_pos = args
-    return evaluate_robot(bot, spawn_pos, target_pos)
+    return evaluate_robot(bot)
 
 def tap_timer(timer_name: str = "Timer"):
     global timers
@@ -293,30 +283,26 @@ def tap_timer(timer_name: str = "Timer"):
     else:
         # Stop the timer and print elapsed time
         total_time = time.time() - timers[timer_name]
-        print(f"--- {timer_name} timer took: {total_time:.2f} sec ---")
+        print(f"[TIMER] {timer_name} timer took: {total_time:.2f} sec")
         del timers[timer_name]  # Reset the timer
 
 # ===============================================================
 # MAIN EVOLUTION LOOP
 # ===============================================================
 def run_evolve_robot(
-    pop_size: int = NUM_POP,
-    gens: int = NUM_GENS,
     seed: int | None = None,
-    spawn_pos: tuple[float, float, float] = SPAWN_POS,
-    target_pos: tuple[float, float, float] = TARGET_POS,
 ):
+    log = []
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
 
-    dest_dir = DATA_PATH / "co_evo_run"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    plots_dir = dest_dir / "plots"
+    DATA_PATH.mkdir(parents=True, exist_ok=True)
+    plots_dir = DATA_PATH / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Initialize population ---
     pop: list[Robot] = []
-    for i in range(pop_size):
+    for i in range(NUM_POP):
         body = [random.uniform(-1, 1) for _ in range(BODY_GENE_LENGTH)]
         ctrl = [random.uniform(-1, 1) for _ in range(100)]  # temp ctrl, resized in eval
         bot = Robot(body, ctrl)
@@ -331,12 +317,15 @@ def run_evolve_robot(
 
     tap_timer("evolution")
     # --- Evolution ---
-    for gen in range(gens):
+    for gen in range(NUM_GENS):
         tap_timer("one generation")
-        print(f"\n===== Generation {gen+1}/{gens} =====")
+        print(f"\n===== Generation {gen+1}/{NUM_GENS} =====")
 
         # Parallel evaluate
-        results = eval_map(_eval_robot_helper, [(b, spawn_pos, target_pos) for b in pop])
+        results = eval_map(_eval_robot_helper, [b for b in pop])
+
+        # Single core evaluate
+        # results = [evaluate_robot(bot, SPAWN_POS, TARGET_POS) for bot in pop]
 
         # Update robots with results from workers
         for bot, result in zip(pop, results):
@@ -349,8 +338,6 @@ def run_evolve_robot(
                 bot.input_size = result['input_size']
                 bot.ctrl = result['ctrl_genes']  # Update with potentially resized controller
                 bot.record_limb_count(result['num_joints'])
-            else:
-                print("Robot returned num_joints as none")
 
         # Replace immobile robots
         for i, bot in enumerate(pop):
@@ -360,8 +347,8 @@ def run_evolve_robot(
                 ctrl = [random.uniform(-1, 1) for _ in range(100)]
                 pop[i] = Robot(body, ctrl)
                 pop[i].gen_created = gen
-                if DEBUG_PROGRESS:
-                    print(f"[!] Replacing immobile robot {old_id} with robot {pop[i].id} (disp={bot.disp:.3f})")
+                # if DEBUG_PROGRESS:
+                    # print(f"[!] Replacing immobile robot {old_id} with robot {pop[i].id} (disp={bot.disp:.3f})")
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary start generation ---")
@@ -384,7 +371,7 @@ def run_evolve_robot(
             mutate_robot(b2)
             next_pop += [b1, b2]
 
-        pop = next_pop[:pop_size]
+        pop = next_pop[:NUM_POP]
         pop[0] = best  # elitism
 
         if DEBUG_PROGRESS:
@@ -393,9 +380,19 @@ def run_evolve_robot(
                 print(bot.stats())
             print("---------------------------")
 
+        if SAVE_PLOTS:
+            plot_best_trajectory(best.ctrl, best.body_graph, plots_dir)
+
         avg_fit = np.mean([b.fitness[0] for b in pop])
         best_fit = np.max([b.fitness[0] for b in pop])
-        print(f"Gen {gen+1}: avg={avg_fit:.3f}, best={best_fit:.3f}")
+        std_fit = np.std([b.fitness[0] for b in pop])
+        log.append({
+            "gen": gen + 1,
+            "avg": float(avg_fit),
+            "std": float(std_fit),
+            "max": float(best_fit)
+        })
+        print(f"Gen {gen + 1}: avg={float(avg_fit)}, std: {float(std_fit)}, best={float(best_fit)}")
 
         tap_timer("one generation")
 
@@ -405,22 +402,39 @@ def run_evolve_robot(
     tap_timer("evolution")
 
     best_robot = max(pop, key=lambda b: b.fitness[0])
-    print(f"\n🏆 Best fitness: {best_robot.fitness[0]:.3f}")
+    print(f"\n\n---------------------------")
+    print(f"🏆 Best fitness: {best_robot.fitness[0]:.3f}")
     print(f"Best robot: {best_robot.stats()}")
-    time.sleep(1)
+    print(f"\n\n---------------------------")
 
     # Use cached body_graph for saving
-    traj, model, data, tracker = run_simulation(best_robot.ctrl, best_robot.body_graph, spawn_pos)
-    save_robot(dest_dir, best_robot.body_graph, best_robot.ctrl, input_size=best_robot.input_size, num_joints=best_robot.num_joints)
+    traj, model, data, tracker = run_simulation(best_robot.ctrl, best_robot.body_graph)
+    save_robot(DATA_PATH, best_robot.body_graph, best_robot.ctrl, input_size=best_robot.input_size, num_joints=best_robot.num_joints)
+
+    if SAVE_LOGS:
+        # === Log saving ===
+        csv_path = DATA_PATH / "fitness_log.csv"
+        save_log_csv(log, csv_path)
+
+        # === Plotting ===
+        plot_fitness(
+            log,
+            dest_dir=DATA_PATH,
+            pop=NUM_POP,
+            task=TASK,
+            out_name="fitness_plot.png"
+        )
 
     if SAVE_PLOTS:
         tap_timer("best_trajectory")
-        plot_best_trajectory(best_robot.ctrl, best_robot.body_graph, spawn_pos, plots_dir, target_pos)
+        plot_best_trajectory(best_robot.ctrl, best_robot.body_graph, plots_dir)
         tap_timer("best_trajectory")
 
         tap_timer("best_fitness")
-        plot_best_fitness_over_time(best_robot.ctrl, best_robot.body_graph, spawn_pos, plots_dir, target_pos)
+        plot_best_fitness_over_time(best_robot.ctrl, best_robot.body_graph, plots_dir)
         tap_timer("best_fitness")
 
 if __name__ == "__main__":
+    tap_timer("Total")
     run_evolve_robot()
+    tap_timer("Total")

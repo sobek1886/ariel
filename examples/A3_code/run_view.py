@@ -16,8 +16,10 @@ from ariel.utils.renderers import single_frame_renderer, video_renderer
 from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
-from evolve.fitness import fitness_function
-from evolve_controller.nn import make_controller_from_weights
+from examples.A3_code.evolve.fitness import fitness_function, distance_to_target
+from examples.A3_code.evolve.nn import make_controller_from_weights
+from examples.A3_code.evolve.config import DATA_PATH, SPAWN_POS, TARGET_POS, TASK
+from examples.A3_code.evolve.utils import load_robot
 
 if TYPE_CHECKING:
     from networkx import DiGraph
@@ -29,7 +31,7 @@ CWD = Path.cwd()
 DATA = CWD / "__data__" / SCRIPT_NAME
 DATA.mkdir(exist_ok=True)
 
-SPAWN_POS = [-0.8, 0, 0.1]
+# SPAWN_POS = [-0.8, 0, 0.1]
 # TARGET_POSITION = [5, 0, 0.5]
 
 def load_controller_weights(path: Path) -> dict[str, np.ndarray]:
@@ -113,7 +115,7 @@ def show_xpos_history(history: list[float]) -> None:
 
     # plt.show()
 
-def experiment(robot: Any, weights=None, tracker=None,duration: int = 15, mode: ViewerTypes = "viewer") -> None:
+def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
     mj.set_mjcb_control(None)
     world = OlympicArena()
     world.spawn(robot.spec, spawn_position=SPAWN_POS)
@@ -143,27 +145,27 @@ def experiment(robot: Any, weights=None, tracker=None,duration: int = 15, mode: 
             viewer.launch(model=model, data=data)
 
 def main() -> None:
-    robot_dir = Path("__robot_data__/saved_robots/test")
-
     # --- Load saved robot graph ---
-    with open(robot_dir / "robot_graph.json", "r") as f:
-        graph_data = json.load(f)
-    robot_graph = nx.node_link_graph(graph_data, edges="links")
+    robot_graph, controller_weights = load_robot(DATA_PATH)
     core = construct_mjspec_from_graph(robot_graph)
 
     # --- Tracker ---
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
-    # --- Load controller weights ---
-    weights = load_controller_weights(robot_dir / "controller.json")
+    # --- DEBUG controller weights ---
     print("DEBUG: Loaded graph has", len(robot_graph.nodes()), "nodes and", len(robot_graph.edges()), "edges")
-    print("DEBUG: Loaded controller weight keys:", weights.keys())
+    print("DEBUG: Loaded controller weight keys:", controller_weights.keys())
 
     # --- Run experiment ---
-    experiment(robot=core, weights=weights, tracker=tracker, mode="launcher")
+    experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
 
-    show_xpos_history(tracker.history["xpos"][0])
-    fitness = fitness_function(tracker.history["xpos"][0])
+    history = tracker.history["xpos"][0]
+    show_xpos_history(history)
+    
+    if TASK.lower() == "nav":
+        fitness = distance_to_target(history)
+    else:
+        fitness = fitness_function(history)
     console.log(f"Fitness of generated robot: {fitness}")
 
 if __name__ == "__main__":
