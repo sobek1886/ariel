@@ -88,50 +88,109 @@ def plot_best_trajectory(
     dist_start = np.linalg.norm(start - np.array(TARGET_POS))
     dist_end = np.linalg.norm(end - np.array(TARGET_POS))
     print(f"[DEBUG] trajectory: Path={path_len:.3f}, StartDist={dist_start:.3f}, EndDist={dist_end:.3f}")
+    print(f"Start: {start}, end: {end}")
 
     plt.figure(figsize=(8, 5))
-    plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory")
+    plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory (XZ)")
     plt.scatter(traj[0,0], traj[0,1], c="g", marker="o", label="Start")
     plt.scatter(traj[-1,0], traj[-1,1], c="r", marker="x", label="End")
-    plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XY)")
-    plt.xlabel("X"); plt.ylabel("Y")
-    plt.title("Best Controller Trajectory (XY projection)")
+    plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XZ)")
+    plt.xlabel("X"); plt.ylabel("Z")
+    plt.title("Best Controller Trajectory (XZ projection)")
     plt.legend(); plt.grid(True)
     plt.savefig(plots_dir / out_name); plt.close()
 
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from examples.A3_code.evolve.config import TARGET_POS
 
-def plot_best_fitness_over_time(
-    genome, robot_graph, plots_dir: Path,
-    out_name: str = "fitness_over_time.png",
-    step: int = 100
-):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
+# --- Helper: compute fitness curves ---
+def compute_fitness_curves(traj, step: int = 100):
+    """Compute dense and final-distance fitness values along the trajectory."""
     fitness_dense, fitness_finaldist, total_dense = [], [], 0.0
 
     for i in range(1, len(traj)):
         prev, curr = traj[i-1], traj[i]
-        prev_dist = np.linalg.norm(prev - np.array(TARGET_POS))
-        curr_dist = np.linalg.norm(curr - np.array(TARGET_POS))
+        # use x,z plane if your order is [x,z,y]
+        prev_dist = np.linalg.norm(prev[[0, 1]] - np.array(TARGET_POS)[[0, 1]])
+        curr_dist = np.linalg.norm(curr[[0, 1]] - np.array(TARGET_POS)[[0, 1]])
+
         total_dense += (prev_dist - curr_dist)
         bonus = 1.0 / (1.0 + curr_dist)
         dense_val = total_dense + bonus
         final_val = -curr_dist
+
         if i % step == 0 or i == len(traj) - 1:
             fitness_dense.append(dense_val)
             fitness_finaldist.append(final_val)
 
-    timesteps = [i for i in range(step, len(fitness_dense)*step+1, step)]
+    timesteps = [i for i in range(step, len(fitness_dense) * step + 1, step)]
     if len(timesteps) > len(fitness_dense):
         timesteps = timesteps[:len(fitness_dense)]
 
+    return timesteps, fitness_dense, fitness_finaldist
+
+
+# --- Helper: generic plotting function ---
+def _plot_curve(x, y, label, color, xlabel, ylabel, title, save_path):
+    plt.figure(figsize=(8, 5))
+    plt.plot(x, y, color=color, label=label)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[SAVED] {save_path}")
+
+
+# --- Main function ---
+def plot_best_fitness_over_time(
+    genome, robot_graph, plots_dir: Path,
+    out_name_combined: str = "fitness_over_time_combined.png",
+    step: int = 100
+):
+    # Run simulation
+    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
+
+    # Compute curves
+    timesteps, fitness_dense, fitness_finaldist = compute_fitness_curves(traj, step)
+
+    # 1️⃣ Plot dense fitness alone
+    _plot_curve(
+        timesteps, fitness_dense,
+        label="Dense fitness (distance_to_target)",
+        color="blue",
+        xlabel="Timestep", ylabel="Fitness",
+        title=f"Dense Fitness Progression (step={step})",
+        save_path=plots_dir / "fitness_dense.png"
+    )
+
+    # 2️⃣ Plot final distance fitness alone
+    _plot_curve(
+        timesteps, fitness_finaldist,
+        label="Final distance fitness",
+        color="red",
+        xlabel="Timestep", ylabel="Fitness",
+        title=f"Final Distance Fitness Progression (step={step})",
+        save_path=plots_dir / "fitness_finaldist.png"
+    )
+
+    # 3️⃣ Combined plot
     plt.figure(figsize=(8, 5))
     plt.plot(timesteps, fitness_dense, label="Dense fitness (distance_to_target)", color="blue")
     plt.plot(timesteps, fitness_finaldist, label="Final distance fitness", color="red", linestyle="--")
-    plt.xlabel("Timestep"); plt.ylabel("Fitness")
-    plt.title(f"Best Controller Fitness Progression (update={step})")
-    plt.legend(); plt.grid(True)
-    plt.savefig(plots_dir / out_name); plt.close()
-    print(f"Fitness-over-time plot saved to {plots_dir / out_name}")
+    plt.xlabel("Timestep")
+    plt.ylabel("Fitness")
+    plt.title(f"Combined Fitness Progression (step={step})")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(plots_dir / out_name_combined)
+    plt.close()
+
+    print(f"[SAVED] Combined fitness plot: {plots_dir / out_name_combined}")
 
 
 def plot_best_fitness_over_time_OG(
