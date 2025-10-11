@@ -9,9 +9,9 @@ from ariel.simulation.environments import OlympicArena
 from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
-from examples.A3_code.evolve.fitness import distance_to_target
 from examples.A3_code.evolve.nn import make_controller_from_genome, decode_genome, build_controller, infer_input_size
 from examples.A3_code.evolve.config import DURATION, SPAWN_POS, TARGET_POS, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, STATE_FEATURES
+from examples.A3_code.evolve.fitness import olympic_arena_fitness
 
 def count_num_joints(robot_graph):
     """Calculates number of joints directly from a NetworkX DiGraph."""
@@ -54,28 +54,60 @@ def run_simulation(genome, robot_graph):
 
 # === Log saving ===
 def save_log_csv(log, csv_path: Path):
+    """Save log with flexible column handling."""
+    if not log:
+        return
+    
+    # Get all keys from first record
+    headers = list(log[0].keys())
+    
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["gen", "avg", "std", "max"])
+        w.writerow(headers)
         for rec in log:
-            w.writerow([rec["gen"], rec["avg"], rec["std"], rec["max"]])
+            w.writerow([rec[h] for h in headers])
     print(f"Log saved to {csv_path}")
 
 
 # === Plotting ===
 def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png"):
+    
     gens = [rec["gen"] for rec in log]
     avg  = np.array([rec["avg"] for rec in log])
-    std  = np.array([rec["std"] for rec in log])
+    median = np.array([rec.get("median", rec["avg"]) for rec in log])  # fallback to avg if no median
+    q25  = np.array([rec.get("q25", rec["avg"] - rec.get("std", 0)) for rec in log])
+    q75  = np.array([rec.get("q75", rec["avg"] + rec.get("std", 0)) for rec in log])
     maxv = np.array([rec["max"] for rec in log])
+    minv = np.array([rec.get("min", rec["avg"] - 2*rec.get("std", 0)) for rec in log])
+    
     plt.figure(figsize=(10, 6))
-    plt.plot(gens, avg, label="Average Fitness")
-    plt.fill_between(gens, avg - std, avg + std, alpha=0.3, label="Std Dev")
-    plt.plot(gens, maxv, label="Best Fitness")
-    plt.xlabel("Generation"); plt.ylabel("Fitness")
-    plt.title(f"{task.upper()} evolution (pop={pop}, duration={DURATION})")
-    plt.legend(); plt.grid(True)
-    plt.savefig(dest_dir / out_name); plt.close()
+    
+    # Plot median (more robust than mean for skewed data)
+    plt.plot(gens, median, label="Median Fitness", color='blue', linewidth=2)
+    
+    # Fill between 25th and 75th percentiles (interquartile range)
+    plt.fill_between(gens, q25, q75, alpha=0.3, color='blue', label="IQR (25th-75th percentile)")
+    
+    # Plot best fitness
+    plt.plot(gens, maxv, label="Best Fitness", color='green', linewidth=2, linestyle='--')
+    
+    # Optionally plot average
+    plt.plot(gens, avg, label="Average Fitness", color='orange', linewidth=1, linestyle=':')
+    
+    plt.xlabel("Generation", fontsize=12)
+    plt.ylabel("Fitness", fontsize=12)
+    plt.title(f"{task.upper()} Evolution\n(pop={pop}, duration={DURATION}s", fontsize=12)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    
+    # Add horizontal line at y=0 for reference
+    plt.axhline(y=0, color='r', linestyle=':', alpha=0.5, linewidth=1)
+    
+    plt.tight_layout()
+    plt.savefig(dest_dir / out_name, dpi=150)
+    plt.close()
+    
+    print(f"[SAVED] Fitness plot: {dest_dir / out_name}")
 
 
 def plot_best_trajectory(
@@ -96,41 +128,10 @@ def plot_best_trajectory(
     plt.scatter(traj[-1,0], traj[-1,1], c="r", marker="x", label="End")
     plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XZ)")
     plt.xlabel("X"); plt.ylabel("Z")
-    plt.title("Best Controller Trajectory (XZ projection)")
+    fitness = olympic_arena_fitness(traj)
+    plt.title(f"Best Controller Trajectory (XZ projection) fit={fitness}")
     plt.legend(); plt.grid(True)
     plt.savefig(plots_dir / out_name); plt.close()
-
-import numpy as np
-import matplotlib.pyplot as plt
-from pathlib import Path
-from examples.A3_code.evolve.config import TARGET_POS
-
-# --- Helper: compute fitness curves ---
-def compute_fitness_curves(traj, step: int = 100):
-    """Compute dense and final-distance fitness values along the trajectory."""
-    fitness_dense, fitness_finaldist, total_dense = [], [], 0.0
-
-    for i in range(1, len(traj)):
-        prev, curr = traj[i-1], traj[i]
-        # use x,z plane if your order is [x,z,y]
-        prev_dist = np.linalg.norm(prev[[0, 1]] - np.array(TARGET_POS)[[0, 1]])
-        curr_dist = np.linalg.norm(curr[[0, 1]] - np.array(TARGET_POS)[[0, 1]])
-
-        total_dense += (prev_dist - curr_dist)
-        bonus = 1.0 / (1.0 + curr_dist)
-        dense_val = total_dense + bonus
-        final_val = -curr_dist
-
-        if i % step == 0 or i == len(traj) - 1:
-            fitness_dense.append(dense_val)
-            fitness_finaldist.append(final_val)
-
-    timesteps = [i for i in range(step, len(fitness_dense) * step + 1, step)]
-    if len(timesteps) > len(fitness_dense):
-        timesteps = timesteps[:len(fitness_dense)]
-
-    return timesteps, fitness_dense, fitness_finaldist
-
 
 # --- Helper: generic plotting function ---
 def _plot_curve(x, y, label, color, xlabel, ylabel, title, save_path):
@@ -145,6 +146,60 @@ def _plot_curve(x, y, label, color, xlabel, ylabel, title, save_path):
     plt.close()
     print(f"[SAVED] {save_path}")
 
+# --- Helper: compute ALL fitness curves ---
+def compute_all_fitness_curves(traj, step: int = 100):
+    """Compute all fitness function values along the trajectory."""
+    from examples.A3_code.evolve.fitness import (
+        dist_to_target,
+        forward_progress_fitness,
+        distance_to_target_improved,
+        olympic_arena_fitness,
+        hybrid_fitness
+    )
+    
+    # Store all fitness values
+    all_fitness = {
+        'dist_to_target': [],
+        'forward_progress_fitness': [],
+        'distance_to_target_improved': [],
+        'olympic_arena_fitness': [],
+        'hybrid_fitness': [],
+    }
+    
+    timesteps = []
+    
+    for i in range(step, len(traj), step):
+        partial_traj = traj[:i+1]
+        timesteps.append(i)
+        
+        # Compute each fitness function
+        all_fitness['dist_to_target'].append(
+            dist_to_target(partial_traj)
+        )
+        all_fitness['forward_progress_fitness'].append(
+            forward_progress_fitness(partial_traj)
+        )
+        all_fitness['distance_to_target_improved'].append(
+            distance_to_target_improved(partial_traj)
+        )
+        all_fitness['olympic_arena_fitness'].append(
+            olympic_arena_fitness(partial_traj)
+        )
+        all_fitness['hybrid_fitness'].append(
+            hybrid_fitness(partial_traj)
+        )
+    
+    # Add final point
+    if len(traj) - 1 not in timesteps:
+        timesteps.append(len(traj) - 1)
+        all_fitness['dist_to_target'].append(dist_to_target(traj))
+        all_fitness['forward_progress_fitness'].append(forward_progress_fitness(traj))
+        all_fitness['distance_to_target_improved'].append(distance_to_target_improved(traj))
+        all_fitness['olympic_arena_fitness'].append(olympic_arena_fitness(traj))
+        all_fitness['hybrid_fitness'].append(hybrid_fitness(traj))
+    
+    return timesteps, all_fitness
+
 
 # --- Main function ---
 def plot_best_fitness_over_time(
@@ -152,59 +207,96 @@ def plot_best_fitness_over_time(
     out_name_combined: str = "fitness_over_time_combined.png",
     step: int = 100
 ):
+    """
+    Plot fitness progression over time for ALL fitness functions.
+    Creates individual plots for each function and one combined plot.
+    """
     # Run simulation
     traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
 
-    # Compute curves
-    timesteps, fitness_dense, fitness_finaldist = compute_fitness_curves(traj, step)
+    # Compute all fitness curves
+    timesteps, all_fitness = compute_all_fitness_curves(traj, step)
 
-    # 1️⃣ Plot dense fitness alone
-    _plot_curve(
-        timesteps, fitness_dense,
-        label="Dense fitness (distance_to_target)",
-        color="blue",
-        xlabel="Timestep", ylabel="Fitness",
-        title=f"Dense Fitness Progression (step={step})",
-        save_path=plots_dir / "fitness_dense.png"
-    )
+    # Define colors and line styles for each fitness function
+    fitness_styles = {
+        'dist_to_target': {'color': 'red', 'linestyle': '-', 'label': 'Simple Distance (Original)'},
+        'forward_progress_fitness': {'color': 'orange', 'linestyle': '--', 'label': 'Forward Progress'},
+        'distance_to_target_improved': {'color': 'green', 'linestyle': '-', 'label': 'Dense Improved'},
+        'olympic_arena_fitness': {'color': 'purple', 'linestyle': '--', 'label': 'Olympic Arena'},
+        'hybrid_fitness': {'color': 'black', 'linestyle': '-', 'label': 'Hybrid (Combined)'}
+    }
 
-    # 2️⃣ Plot final distance fitness alone
-    _plot_curve(
-        timesteps, fitness_finaldist,
-        label="Final distance fitness",
-        color="red",
-        xlabel="Timestep", ylabel="Fitness",
-        title=f"Final Distance Fitness Progression (step={step})",
-        save_path=plots_dir / "fitness_finaldist.png"
-    )
+    # 1️⃣ Create individual plots for each fitness function
+    # for func_name, style in fitness_styles.items():
+    #     _plot_curve(
+    #         timesteps, all_fitness[func_name],
+    #         label=style['label'],
+    #         color=style['color'],
+    #         xlabel="Timestep", 
+    #         ylabel="Fitness",
+    #         title=f"{style['label']} Progression (step={step})",
+    #         save_path=plots_dir / f"fitness_{func_name}.png"
+    #     )
 
-    # 3️⃣ Combined plot
-    plt.figure(figsize=(8, 5))
-    plt.plot(timesteps, fitness_dense, label="Dense fitness (distance_to_target)", color="blue")
-    plt.plot(timesteps, fitness_finaldist, label="Final distance fitness", color="red", linestyle="--")
-    plt.xlabel("Timestep")
-    plt.ylabel("Fitness")
-    plt.title(f"Combined Fitness Progression (step={step})")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(plots_dir / out_name_combined)
+    # 2️⃣ Create combined plot with all fitness functions
+    plt.figure(figsize=(12, 7))
+    
+    for func_name, style in fitness_styles.items():
+        plt.plot(
+            timesteps, 
+            all_fitness[func_name], 
+            label=style['label'],
+            color=style['color'],
+            linestyle=style['linestyle'],
+            linewidth=2,
+            alpha=0.8
+        )
+    
+    plt.xlabel("Timestep", fontsize=12)
+    plt.ylabel("Fitness", fontsize=12)
+    plt.title(f"All Fitness Functions Comparison (step={step})", fontsize=14)
+    plt.legend(fontsize=10, loc='best')
+    plt.grid(True, alpha=0.3)
+    plt.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+    
+    plt.tight_layout()
+    plt.savefig(plots_dir / out_name_combined, dpi=150)
     plt.close()
 
     print(f"[SAVED] Combined fitness plot: {plots_dir / out_name_combined}")
 
+    # 3️⃣ Create a subplot grid for better comparison
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    axes = axes.flatten()
+    
+    for idx, (func_name, style) in enumerate(fitness_styles.items()):
+        axes[idx].plot(
+            timesteps, 
+            all_fitness[func_name],
+            color=style['color'],
+            linestyle=style['linestyle'],
+            linewidth=2
+        )
+        axes[idx].set_title(style['label'], fontsize=11)
+        axes[idx].set_xlabel("Timestep", fontsize=10)
+        axes[idx].set_ylabel("Fitness", fontsize=10)
+        axes[idx].grid(True, alpha=0.3)
+        axes[idx].axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+    
+    plt.tight_layout()
+    plt.savefig(plots_dir / "fitness_comparison_grid.png", dpi=150)
+    plt.close()
+    
+    print(f"[SAVED] Fitness comparison grid: {plots_dir / 'fitness_comparison_grid.png'}")
 
-def plot_best_fitness_over_time_OG(
-    genome, robot_graph, plots_dir: Path,
-    out_name: str = "fitness_over_time.png"
-):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
-    fitness_values = [distance_to_target(traj[:i+1]) for i in range(len(traj))]
-    plt.figure(figsize=(8, 5))
-    plt.plot(fitness_values, label="Fitness over time")
-    plt.xlabel("Timestep"); plt.ylabel("Fitness")
-    plt.title("Best Controller Fitness Progression")
-    plt.legend(); plt.grid(True)
-    plt.savefig(plots_dir / out_name); plt.close()
+    # 4️⃣ Print final fitness values for comparison
+    print("\n" + "="*60)
+    print("FINAL FITNESS VALUES COMPARISON:")
+    print("="*60)
+    for func_name, style in fitness_styles.items():
+        final_fitness = all_fitness[func_name][-1]
+        print(f"{style['label']:30s}: {final_fitness:10.3f}")
+    print("="*60 + "\n")
 
 # === Save/Load Robot ===
 def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints):

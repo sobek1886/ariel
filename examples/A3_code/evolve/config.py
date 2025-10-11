@@ -11,14 +11,14 @@ MUT_SIGMA, MUT_INDPB = 0.2, 0.1
 CX_PROB, MUT_PROB = 0.5, 0.3
 TOURNAMENT_SIZE = 3
 
-DURATION = 30
+DURATION = 10
 NUM_POP = 10
-NUM_GENS = 5
+NUM_GENS = 3
 
 STATE_SET = "rich"
 TASK = "nav"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "co_evo_run"
+DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "freddy"
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"

@@ -10,7 +10,6 @@ from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from ariel.body_phenotypes.robogen_lite.decoders.hi_prob_decoding import HighProbabilityDecoder
 from ariel.ec.genotypes.nde import NeuralDevelopmentalEncoding
-from examples.A3_code.evolve.fitness import distance_to_target, fitness_function
 
 from examples.A3_code.evolve.config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
@@ -20,6 +19,7 @@ from examples.A3_code.evolve.config import (
     BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE
 )
 from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
+from examples.A3_code.evolve.fitness import olympic_arena_fitness
 from examples.A3_code.evolve.utils import (
     make_world, plot_fitness,
     plot_best_trajectory, plot_best_fitness_over_time,
@@ -231,10 +231,15 @@ def evaluate_robot(bot: Robot):
         # print(f"  GENOTYPE_SIZE = {GENOTYPE_SIZE}")
         # print(f"  NUM_OF_MODULES = {NUM_OF_MODULES}")
         
-        ctrl_genes = bot.ctrl
-        if len(bot.ctrl) != required_len:
-            ctrl_genes = [random.uniform(-1.0, 1.0) for _ in range(required_len)]
-            # print(f"  Resized controller = {len(ctrl_genes)}")
+        ctrl_genes = bot.ctrl.copy()
+        curr_len = len(ctrl_genes)
+
+        if curr_len < required_len:
+            # Add new random genes to fill missing values
+            ctrl_genes += [random.uniform(-1.0, 1.0) for _ in range(required_len - curr_len)]
+        elif curr_len > required_len:
+            # Truncate excess genes
+            ctrl_genes = ctrl_genes[:required_len]
 
         # Simulate
         traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph)
@@ -247,10 +252,7 @@ def evaluate_robot(bot: Robot):
         if disp < IMMOBILE_THRESH:
             fitness = -999.0  # immobile
         else:
-            if TASK.lower() == "nav":
-                fitness = distance_to_target(traj)
-            else:
-                fitness = fitness_function(traj)
+            fitness = olympic_arena_fitness(traj)
 
         # Return all data needed for updating bot in main process
         return {
@@ -386,16 +388,25 @@ def run_evolve_robot(
 
             plot_best_trajectory(best.ctrl, best.body_graph, gen_dir, out_name=f"trajectory_{gen}.png")
 
-        avg_fit = np.mean([b.fitness[0] for b in pop])
-        best_fit = np.max([b.fitness[0] for b in pop])
-        std_fit = np.std([b.fitness[0] for b in pop])
+        # Compute statistics (use quartiles for skewed distributions)
+        fits_array = np.array([b.fitness[0] for b in pop])
+        avg_fit = np.mean(fits_array)
+        best_fit = np.max(fits_array)
+        worst_fit = np.min(fits_array)
+        median_fit = np.median(fits_array)
+        q25 = np.percentile(fits_array, 25)
+        q75 = np.percentile(fits_array, 75)
+        
         log.append({
             "gen": gen + 1,
             "avg": float(avg_fit),
-            "std": float(std_fit),
+            "median": float(median_fit),
+            "q25": float(q25),
+            "q75": float(q75),
+            "min": float(worst_fit),
             "max": float(best_fit)
         })
-        print(f"Gen {gen + 1}: avg={float(avg_fit)}, std: {float(std_fit)}, best={float(best_fit)}")
+        print(f"Gen {gen + 1}: avg={float(avg_fit):.3f}, median={float(median_fit):.3f}, best={float(best_fit):.3f}")
 
         tap_timer("one generation")
 
