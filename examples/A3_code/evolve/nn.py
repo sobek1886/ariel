@@ -1,9 +1,8 @@
 import numpy as np
-from typing import Optional
+from typing import Optional, Sequence, Iterable
 from ariel.simulation.controllers.controller import Controller
-from .config import (
-    STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, TARGET_POS,
-    get_state_vector, infer_input_size
+from examples.A3_code.evolve.config import (
+    STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, TARGET_POS, STATE_FEATURES_RICH, STATE_FEATURES_MINIMAL
 )
 
 def _decode_1layer(genome: np.ndarray, input_size: int, hidden_size: int, output_size: int):
@@ -157,7 +156,7 @@ def make_controller_from_genome(
 
     def _callback(model, data):
         state = get_state_vector(
-            data, num_joints, STATE_FEATURES, target_pos=target_pos
+            data, num_joints, STATE_FEATURES
         ).astype(np.float32)
         if record_pos is not None:
             record_pos.append(data.qpos[:3].copy())
@@ -203,7 +202,7 @@ def make_controller_from_weights(
 
     def _callback(model, data):
         state = get_state_vector(
-            data, num_joints, STATE_FEATURES, target_pos=target_pos
+            data, num_joints, STATE_FEATURES
         ).astype(np.float32).copy()
         # print("State vector:", state)
         # print("infer_input_size:", infer_input_size(num_joints, STATE_FEATURES))
@@ -219,3 +218,52 @@ def make_controller_from_weights(
         alpha=alpha,
         tracker=tracker,
     )
+
+    
+def infer_input_size(num_joints: int, features: Iterable[str]) -> int:
+    feats = set(features)
+    size = 0
+    if "joint_pos"        in feats: size += num_joints
+    if "joint_vel"        in feats: size += num_joints
+    if "torso_quat"       in feats: size += 4
+    if "torso_vel"        in feats: size += 6
+    if "target_dir"       in feats: size += 3   # full 3D direction
+    if "root_pos"         in feats: size += 3
+    if "root_quat"        in feats: size += 4
+    if "root_ext_forces"  in feats: size += 6
+    if "subtree_com"      in feats: size += 3   # only the global COM (body 0)
+    if "qfrc_bias"        in feats: size += num_joints     # trimmed to num_joints for stability
+    if "qfrc_actuator"    in feats: size += num_joints
+    return size
+
+
+def get_state_vector(
+    data,
+    num_joints: int,
+    features: Sequence[str],
+) -> np.ndarray:
+    """
+    Build the state vector.
+    - "minimal": proprioception + torso state + target dir.
+    - "rich": adds contact forces, subtree COM, bias/actuator forces.
+    """
+
+    parts = []
+
+    # --- Minimal state ---
+    parts.append(data.qpos[7:7+num_joints])        # joint positions
+    parts.append(data.qvel[6:6+num_joints])        # joint velocities
+    parts.append(data.qpos[3:7])                   # torso orientation (quat)
+    parts.append(data.qvel[:6])                    # torso linear+angular vel
+    parts.append(np.asarray(TARGET_POS) - data.qpos[:3])  # direction to target
+
+    if features == STATE_FEATURES_RICH:
+        # --- Rich extras ---
+        parts.append(data.xpos[0])           # root pos
+        parts.append(data.xquat[0])          # root orientation
+        parts.append(data.cfrc_ext[0])       # external forces on root
+        parts.append(data.subtree_com[0])    # global COM
+        parts.append(data.qfrc_bias[:num_joints])     # bias forces per joint
+        parts.append(data.qfrc_actuator[:num_joints]) # actuator forces per joint
+
+    return np.concatenate([np.asarray(p, dtype=np.float32) for p in parts])

@@ -16,7 +16,7 @@ from ariel.utils.renderers import single_frame_renderer, video_renderer
 from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
-from fitness import fitness_function
+from evolve.fitness import fitness_function
 from evolve_controller.nn import make_controller_from_weights
 
 if TYPE_CHECKING:
