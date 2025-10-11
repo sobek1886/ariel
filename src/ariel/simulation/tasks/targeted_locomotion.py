@@ -15,10 +15,10 @@ def distance_to_target(
      Returns:
          float: The distance between the two positions.
      """
-     return (
+    return (
          (initial_position[0] - target_position[0]) ** 2
          + (initial_position[1] - target_position[1]) ** 2
-     ) ** 0.5
+    ) ** 0.5
 
 def distance_to_target_ff(xy_history, target_xy=(2.0, 0.0)) -> float:
     """
