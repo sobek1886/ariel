@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=run_co_evolution_alex
+#SBATCH --job-name=360_run_co_evolution_alex
 #SBATCH --partition=gpu_vis
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,7 +7,7 @@
 #SBATCH --time=4:00:00
 #SBATCH --gpus=1
 #SBATCH --mem=0                   # all RAM on the node
-#SBATCH --output=./slurm_out/run_co_evolution_alex.out
+#SBATCH --output=./slurm_out/run_co_evolution_alex_288_%j.out
 #SBATCH --error=logs/%x_%j.err
 
 # prevent thread oversubscription inside each process
@@ -20,7 +20,6 @@ module purge
 
 source .venv/bin/activate
 export PYTHONUNBUFFERED=1
-
 
 uv run -m examples.A3_code.evolve.evolve
 

@@ -11,8 +11,8 @@ MUT_SIGMA, MUT_INDPB = 0.2, 0.2
 CX_PROB, MUT_PROB = 0.5, 0.3
 TOURNAMENT_SIZE = 7
 
-NUM_POP = 300
-NUM_GENS = 400
+NUM_POP = 360
+NUM_GENS = 500
 
 # Dynamic duration: start short, increase over time
 BASE_DURATION = 10
@@ -21,7 +21,9 @@ DURATION_RAMP_GENS = NUM_GENS  # Reach max at generation
 
 STATE_SET = "rich"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "Final_Run_6pm"
+#DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "Final_Run_9pm_360"
+DATA_PATH = Path("/scratch-shared/tiancu/__robot_data__/saved_robots/Final_Run_9pm_360")
+
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"
