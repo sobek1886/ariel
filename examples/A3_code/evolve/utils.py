@@ -30,7 +30,7 @@ def make_world():
     return world
 
 # === Helper: run_simulation (reuses common setup) ===
-def run_simulation(genome, robot_graph):
+def run_simulation(ctrl_genes, robot_graph):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
     world.spawn(core.spec, list(SPAWN_POS))
@@ -41,7 +41,7 @@ def run_simulation(genome, robot_graph):
     num_joints = model.nu
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
-    controller = make_controller_from_genome(genome, num_joints, tracker=tracker)
+    controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
     if controller.tracker is not None:
         controller.tracker.setup(world.spec, data)
 
@@ -49,7 +49,15 @@ def run_simulation(genome, robot_graph):
     simple_runner(model, data, duration=DURATION)
 
     traj = np.array(tracker.history["xpos"][0])
-    return traj, model, data, tracker, controller
+
+    # CRITICAL: Clean up to prevent memory leaks
+    mj.set_mjcb_control(None)
+    del model
+    del data
+    del tracker
+    del controller
+
+    return traj
 
 
 # === Log saving ===
@@ -114,7 +122,11 @@ def plot_best_trajectory(
     genome, robot_graph, plots_dir: Path,
     out_name: str = "trajectory.png"
 ):
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
+    traj = run_simulation(genome, robot_graph)
+    
+    # SPEED UP: Subsample trajectory (plot every 10th point)
+    traj_subsampled = traj[::10]  # Every 10th point
+
     start, end = traj[0], traj[-1]
     path_len = np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1))
     dist_start = np.linalg.norm(start - np.array(TARGET_POS))
@@ -123,7 +135,7 @@ def plot_best_trajectory(
     print(f"Start: {start}, end: {end}")
 
     plt.figure(figsize=(8, 5))
-    plt.plot(traj[:,0], traj[:,1], "b-", label="Trajectory (XZ)")
+    plt.plot(traj_subsampled[:,0], traj_subsampled[:,1], "b-", label="Trajectory (XZ)")
     plt.scatter(traj[0,0], traj[0,1], c="g", marker="o", label="Start")
     plt.scatter(traj[-1,0], traj[-1,1], c="r", marker="x", label="End")
     plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XZ)")
@@ -132,6 +144,10 @@ def plot_best_trajectory(
     plt.title(f"Best Controller Trajectory (XZ projection) fit={fitness}")
     plt.legend(); plt.grid(True)
     plt.savefig(plots_dir / out_name); plt.close()
+
+    # Clean up
+    del traj
+    del traj_subsampled
 
 # --- Helper: generic plotting function ---
 def _plot_curve(x, y, label, color, xlabel, ylabel, title, save_path):
@@ -205,14 +221,14 @@ def compute_all_fitness_curves(traj, step: int = 100):
 def plot_best_fitness_over_time(
     genome, robot_graph, plots_dir: Path,
     out_name_combined: str = "fitness_over_time_combined.png",
-    step: int = 100
+    step: int = 250
 ):
     """
     Plot fitness progression over time for ALL fitness functions.
     Creates individual plots for each function and one combined plot.
     """
     # Run simulation
-    traj, model, data, tracker, controller = run_simulation(genome, robot_graph)
+    traj = run_simulation(genome, robot_graph)
 
     # Compute all fitness curves
     timesteps, all_fitness = compute_all_fitness_curves(traj, step)

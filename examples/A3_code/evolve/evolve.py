@@ -21,9 +21,9 @@ from examples.A3_code.evolve.config import (
 from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
 from examples.A3_code.evolve.fitness import olympic_arena_fitness
 from examples.A3_code.evolve.utils import (
-    make_world, plot_fitness,
+    plot_fitness, count_num_joints, run_simulation,
     plot_best_trajectory, plot_best_fitness_over_time,
-    save_log_csv, save_robot, count_num_joints
+    save_log_csv, save_robot
 )
 
 timers = {}
@@ -129,30 +129,6 @@ class Robot:
                 f"disp={self.disp:.1f}")
 
 # ===============================================================
-# SIMULATION
-# ===============================================================
-def run_simulation(ctrl_genes, robot_graph):
-    """Build world, run simulation, return trajectory and model data."""
-    mj.set_mjcb_control(None)
-    world = OlympicArena()
-    core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, list(SPAWN_POS))
-    model = world.spec.compile()
-    data = mj.MjData(model)
-    mj.mj_resetData(model, data)
-
-
-    num_joints = model.nu
-    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
-    controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
-    if controller.tracker is not None:
-        controller.tracker.setup(world.spec, data)
-    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
-    simple_runner(model, data, duration=DURATION)
-    traj = np.array(tracker.history["xpos"][0])
-    return traj, model, data, tracker
-
-# ===============================================================
 # GENETIC OPERATORS
 # ===============================================================
 def crossover_robots(bot1: Robot, bot2: Robot):
@@ -236,7 +212,7 @@ def evaluate_robot(bot: Robot):
             ctrl_genes = ctrl_genes[:required_len]
 
         # Simulate
-        traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph)
+        traj = run_simulation(ctrl_genes, robot_graph)
         disp = np.linalg.norm(traj[-1, [0, 1]] - traj[0, [0, 1]])
 
         # print(f"  displacement = {disp:.3f} m")
@@ -247,6 +223,8 @@ def evaluate_robot(bot: Robot):
             fitness = -999.0  # immobile
         else:
             fitness = olympic_arena_fitness(traj)
+
+        del traj
 
         # Return all data needed for updating bot in main process
         return {
