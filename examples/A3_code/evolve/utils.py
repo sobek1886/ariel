@@ -48,33 +48,43 @@ def run_simulation(ctrl_genes, robot_graph):
     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
     simple_runner(model, data, duration=DURATION)
 
-    traj = np.array(tracker.history["xpos"][0])
+    # Convert to array ONCE
+    traj = np.array(tracker.history["xpos"][0], dtype=np.float32)
 
-    # CRITICAL: Clean up to prevent memory leaks
+    # CRITICAL: Aggressive cleanup
     mj.set_mjcb_control(None)
+    tracker.history.clear()  # Clear tracker history
     del model
     del data
     del tracker
     del controller
+    del world
+    del core
 
     return traj
 
 
 # === Log saving ===
 def save_log_csv(log, csv_path: Path):
-    """Save log with flexible column handling."""
+    """Save or append to fitness log with automatic header handling."""
     if not log:
         return
-    
-    # Get all keys from first record
+
     headers = list(log[0].keys())
-    
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(headers)
-        for rec in log:
-            w.writerow([rec[h] for h in headers])
-    print(f"Log saved to {csv_path}")
+
+    # If the file exists, append rows without rewriting header
+    if csv_path.exists():
+        with open(csv_path, "a", newline="") as f:
+            for rec in log:
+                f.write(",".join(str(rec[h]) for h in headers) + "\n")
+        print(f"Appended {len(log)} entries to {csv_path}")
+    else:
+        # Otherwise, create new file with headers
+        with open(csv_path, "w", newline="") as f:
+            f.write(",".join(headers) + "\n")
+            for rec in log:
+                f.write(",".join(str(rec[h]) for h in headers) + "\n")
+        print(f"Created new log file at {csv_path}")
 
 
 # === Plotting ===
@@ -141,7 +151,7 @@ def plot_best_trajectory(
     plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XZ)")
     plt.xlabel("X"); plt.ylabel("Z")
     fitness = olympic_arena_fitness(traj)
-    plt.title(f"Best Controller Trajectory (XZ projection) fit={fitness}")
+    plt.title(f"Best Controller Trajectory (XZ projection) fit={fitness}, dur={DURATION}s")
     plt.legend(); plt.grid(True)
     plt.savefig(plots_dir / out_name); plt.close()
 
@@ -270,7 +280,7 @@ def plot_best_fitness_over_time(
     
     plt.xlabel("Timestep", fontsize=12)
     plt.ylabel("Fitness", fontsize=12)
-    plt.title(f"All Fitness Functions Comparison (step={step})", fontsize=14)
+    plt.title(f"All Fitness Functions Comparison step={step}, dur={DURATION}", fontsize=14)
     plt.legend(fontsize=10, loc='best')
     plt.grid(True, alpha=0.3)
     plt.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1)
@@ -315,8 +325,8 @@ def plot_best_fitness_over_time(
     print("="*60 + "\n")
 
 # === Save/Load Robot ===
-def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints):
-    robot_path = dest_dir / "robot.json"
+def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints, out="robot.json"):
+    robot_path = dest_dir / out
 
     graph_data = nx.node_link_data(robot_graph, edges="links")
 

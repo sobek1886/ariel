@@ -3,6 +3,8 @@ from pathlib import Path
 import random, json, os, time, multiprocessing, string
 import numpy as np
 import mujoco as mj
+import gc
+import psutil
 from deap import base, creator, tools
 from ariel.simulation.environments import OlympicArena
 from ariel.utils.runners import simple_runner
@@ -14,10 +16,12 @@ from ariel.ec.genotypes.nde import NeuralDevelopmentalEncoding
 from examples.A3_code.evolve.config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
     NUM_POP, NUM_GENS, TARGET_POS, SPAWN_POS,
-    SAVE_PLOTS, SAVE_LOGS, DURATION,
+    SAVE_PLOTS, SAVE_LOGS, SAVE_CHECKPOINTS,
     DEBUG_PROGRESS, GENOTYPE_SIZE, NUM_OF_MODULES,
-    BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE
+    BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE,
+    DURATION_RAMP_GENS, MAX_DURATION, BASE_DURATION
 )
+import examples.A3_code.evolve.config as cfg
 from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
 from examples.A3_code.evolve.fitness import olympic_arena_fitness
 from examples.A3_code.evolve.utils import (
@@ -27,6 +31,8 @@ from examples.A3_code.evolve.utils import (
 )
 
 timers = {}
+last_gen_time = 0
+last_gen_dur = 0
 
 # ===============================================================
 # HELPERS
@@ -81,6 +87,7 @@ class Robot:
         self.mutation_count = 0
         self.gen_created = 0  # for tracking when it appeared
         self.disp = 0.0
+        self.clone_num = 0
 
     def update_body(self):
         self.body_graph = decode_body(self.body)
@@ -97,7 +104,7 @@ class Robot:
         Robot._next_id -= 1 
 
         # Lineage tracking
-        c.clone_num = getattr(self, "clone_num", 0) + 1
+        c.clone_num = self.clone_num + 1
 
         c.fitness = self.fitness
         c.prev_num_joints = self.prev_num_joints
@@ -109,18 +116,20 @@ class Robot:
         c.num_joints = self.num_joints
         c.input_size = self.input_size
         return c
-
+    
     def record_limb_count(self, num_joints: int):
         """Log limb count and detect structural changes."""
-        if self.prev_num_joints is None:
-            self.prev_num_joints = num_joints
-        elif self.prev_num_joints != num_joints:
-            # print(f"[LIMB CHANGE] Robot {self.id} changed limbs: {self.prev_num_joints} → {num_joints}")
-            self.prev_num_joints = num_joints
-        self.limb_history.append(num_joints)
+        self.prev_num_joints = self.num_joints
+
+        if self.prev_num_joints != num_joints:
+            # CRITICAL: Limit history size to prevent memory growth
+            self.limb_history.append(num_joints)
+            if len(self.limb_history) > 50:  # Keep only last 100 evaluations
+                print(f"[INFO] Truncating limb history for bot: {self.id}.{self.clone_num}")
+                self.limb_history = self.limb_history[-50:]  # Trim to 50
 
     def stats(self):
-        return (f"Robot {self.id}.{getattr(self, 'clone_num', 0)} | "
+        return (f"Robot {self.id}.{self.clone_num} | "
                 f"fitness={self.fitness[0]:.1f} | "
                 f"mutations={self.mutation_count} | "
                 f"limbs={self.num_joints} | "
@@ -168,7 +177,7 @@ def mutate_robot(bot: Robot):
 
     if is_mutate:
         # After mutating the body, rebuild the morphology
-        # print(f"[MUTATION] Robot {bot.id}.{getattr(bot, 'clone_num', 0)} body mutated, rebuilding morphology.")
+        # print(f"[MUTATION] Robot {self.id}.{self.clone_num} body mutated, rebuilding morphology.")
         bot.mutation_count += 1
         # print(f"    HAD limbs: {bot.num_joints} and input_size: {bot.input_size}")
         bot.update_body()
@@ -213,6 +222,28 @@ def evaluate_robot(bot: Robot):
 
         # Simulate
         traj = run_simulation(ctrl_genes, robot_graph)
+
+        # --- EARLY MOBILITY CHECK ---
+        # sample 25%, 50%, 75% of the trajectory
+        samples = [len(traj)//4, len(traj)//2, 3*len(traj)//4]
+        early_disps = [
+            np.linalg.norm(traj[s, [0, 1]] - traj[0, [0, 1]])
+            for s in samples
+        ]
+
+        # If all displacements are below threshold -> immobile
+        if all(d < IMMOBILE_THRESH for d in early_disps):
+            # Skip rest of computation — robot clearly not moving
+            del traj
+            return {
+                'fitness': -999.0,
+                'disp': 0.0,
+                'num_joints': num_joints,
+                'input_size': input_size,
+                'ctrl_genes': ctrl_genes
+            }
+
+        # --- Otherwise compute full displacement and fitness ---
         disp = np.linalg.norm(traj[-1, [0, 1]] - traj[0, [0, 1]])
 
         # print(f"  displacement = {disp:.3f} m")
@@ -254,11 +285,37 @@ def tap_timer(timer_name: str = "Timer"):
     if timer_name not in timers:
         # Start the timer
         timers[timer_name] = time.time()
+        return 0
     else:
         # Stop the timer and print elapsed time
         total_time = time.time() - timers[timer_name]
         print(f"[TIMER] {timer_name} timer took: {total_time:.2f} sec")
         del timers[timer_name]  # Reset the timer
+        return total_time
+
+def print_memory_usage(label=""):
+    """Print current memory usage."""
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    rss_gb = mem_info.rss / (1024 ** 3)
+    vms_gb = mem_info.vms / (1024 ** 3)
+    print(f"[MEMORY {label}] RSS: {rss_gb:.2f} GB, VMS: {vms_gb:.2f} GB")
+
+def print_summary_pop(pop, gen):
+    print(f"\n[SUMMARY] Gen {gen+1}: "
+      f"Mobile: {sum(1 for b in pop if b.disp >= IMMOBILE_THRESH)}/{len(pop)}, "
+      f"Avg limbs: {np.mean([b.num_joints for b in pop]):.1f}")
+    
+    # Only show top 3 and bottom 
+    sorted_pop = sorted(pop, key=lambda b: b.fitness[0], reverse=True)
+
+    print("Top 3:")
+    for bot in sorted_pop[:3]:
+        print(f"  {bot.stats()}")
+
+    print("Bottom 3:")
+    for bot in sorted_pop[-3:]:
+        print(f"  {bot.stats()}")
 
 # ===============================================================
 # MAIN EVOLUTION LOOP
@@ -280,20 +337,41 @@ def run_evolve_robot(
         body = [random.uniform(-1, 1) for _ in range(BODY_GENE_LENGTH)]
         ctrl = [random.uniform(-1, 1) for _ in range(100)]  # temp ctrl, resized in eval
         bot = Robot(body, ctrl)
-        bot.gen_created = 0  # generation 0
         pop.append(bot)
 
     # --- Parallel evaluation setup ---
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", multiprocessing.cpu_count()))
-    pool = multiprocessing.Pool(n_cpus)
 
-    def eval_map(f, items): return pool.map(f, items)
+    # CRITICAL: Pool refresh settings
+    POOL_REFRESH_INTERVAL = 10  # Recreate pool every 10 generations
+    pool = None
+
+    def eval_map(f, items):
+        return pool.map(f, items)
 
     tap_timer("evolution")
     # --- Evolution ---
     for gen in range(NUM_GENS):
         tap_timer("one generation")
-        print(f"\n===== Generation {gen+1}/{NUM_GENS} =====")
+
+        current_duration = min(
+            BASE_DURATION + (MAX_DURATION - BASE_DURATION) * (gen / DURATION_RAMP_GENS),
+            MAX_DURATION
+        )
+        current_duration = int(current_duration)
+        cfg.DURATION = current_duration
+
+        print(f"\n===== Start of Generation {gen+1}/{NUM_GENS} (duration={current_duration}s)=====")
+
+        # CRITICAL: Recreate pool periodically to prevent memory buildup
+        if gen % POOL_REFRESH_INTERVAL == 0:
+            if pool is not None:
+                pool.close()
+                pool.join()
+                del pool
+                gc.collect()  # Force garbage collection
+            pool = multiprocessing.Pool(n_cpus)
+            print(f"[MEMORY] Refreshed multiprocessing pool at generation {gen+1}")
 
         # Parallel evaluate
         results = eval_map(_eval_robot_helper, [b for b in pop])
@@ -308,10 +386,10 @@ def run_evolve_robot(
             
             # Update bot state from worker results
             if result['num_joints'] is not None:
+                bot.record_limb_count(result['num_joints'])
                 bot.num_joints = result['num_joints']
                 bot.input_size = result['input_size']
                 bot.ctrl = result['ctrl_genes']  # Update with potentially resized controller
-                bot.record_limb_count(result['num_joints'])
 
         # Replace immobile robots
         for i, bot in enumerate(pop):
@@ -326,8 +404,7 @@ def run_evolve_robot(
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary start generation ---")
-            for bot in pop:
-                print(bot.stats())
+            print_summary_pop(pop, gen)
             print("---------------------------")
 
         # Selection, crossover, mutation
@@ -350,9 +427,21 @@ def run_evolve_robot(
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary end generation ---")
-            for bot in pop:
-                print(bot.stats())
+            print_summary_pop(pop, gen)
             print("---------------------------")
+
+
+        gc.collect()
+        print_memory_usage(f"Gen {gen+1}")
+        
+        # Save checkpoint every 10 generations
+        if SAVE_CHECKPOINTS:
+            chk_pnt_path = DATA_PATH / f"checkpoints"
+            chk_pnt_path.mkdir(parents=True, exist_ok=True)
+
+            save_robot(chk_pnt_path, best.body_graph, best.ctrl,
+                        input_size=best.input_size, num_joints=best.num_joints, out=f"robot_gen_{gen+1}.json")
+            print(f"[CHECKPOINT] Saved at generation {gen+1}")
 
         if SAVE_PLOTS:
             gen_dir = plots_dir / f"generations"
@@ -380,7 +469,34 @@ def run_evolve_robot(
         })
         print(f"Gen {gen + 1}: avg={float(avg_fit):.3f}, median={float(median_fit):.3f}, best={float(best_fit):.3f}")
 
-        tap_timer("one generation")
+        if SAVE_PLOTS:
+            if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1:
+                csv_path = DATA_PATH / "fitness_log.csv"
+
+                save_log_csv(log, csv_path)
+
+                print(f"[LOG] Appended up to generation {gen+1}")
+
+                # Optionally replot
+                gen_dir = plots_dir / f"generations"
+                gen_dir.mkdir(parents=True, exist_ok=True)
+                plot_fitness(
+                    log,
+                    dest_dir=gen_dir,
+                    pop=NUM_POP,
+                    task=TASK,
+                    out_name=f"fitness_plot_gen_{gen+1}.png"
+                )
+
+            gc.collect()
+
+        print("\n")
+        new_gen_time = tap_timer("one generation")
+        print(f"    Gen duration increased by {current_duration - last_gen_dur}, time took to run gen increased by: {new_gen_time - last_gen_time}")
+        last_gen_time = new_gen_time
+        last_gen_dur = current_duration
+        print("\n")
+
 
     # --- Finalize ---
     pool.close()
@@ -391,6 +507,7 @@ def run_evolve_robot(
     print(f"\n\n---------------------------")
     print(f"🏆 Best fitness: {best_robot.fitness[0]:.3f}")
     print(f"Best robot: {best_robot.stats()}")
+    print(f"Best robot limb history: {best_robot.limb_history}")
     print(f"\n\n---------------------------")
 
     # Use cached body_graph for saving
@@ -423,4 +540,4 @@ if __name__ == "__main__":
     tap_timer("Total")
     run_evolve_robot()
     tap_timer("Total")
-    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, duration: {DURATION}")
+    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, max duration: {cfg.DURATION}")
