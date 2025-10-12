@@ -21,7 +21,6 @@ from examples.A3_code.evolve.config import (
     BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE,
     DURATION_RAMP_GENS, MAX_DURATION, BASE_DURATION
 )
-import examples.A3_code.evolve.config as cfg
 from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
 from examples.A3_code.evolve.fitness import olympic_arena_fitness
 from examples.A3_code.evolve.utils import (
@@ -53,34 +52,22 @@ def decode_body(body_genes):
 # ===============================================================
 # DATA CLASSES
 # ===============================================================
-# class Robot:
-#     """Represents an evolutionary individual with body and controller genomes."""
-#     def __init__(self, body_genes: list[float], ctrl_genes: list[float]):
-#         self.body = body_genes
-#         self.ctrl = ctrl_genes
-#         self.fitness = (-999.0,)
-
-#     def clone(self):
-#         c = Robot(self.body.copy(), self.ctrl.copy())
-#         c.fitness = self.fitness
-#         return c
-
-# ===============================================================
-# DATA CLASSES
-# ===============================================================
 class Robot:
     """Represents an evolutionary individual with body and controller genomes."""
     _next_id = 0  # static counter for unique IDs
 
-    def __init__(self, body_genes: list[float], ctrl_genes: list[float]):
-        self.id = Robot._next_id
-        Robot._next_id += 1
+    def __init__(self, body_genes: list[float], ctrl_genes: list[float], _from_clone=False):
+        if not _from_clone:
+            self.id = Robot._next_id
+            Robot._next_id += 1
+        else:
+            self.id = None  # Will be set by clone() method
 
         self.body = body_genes
-        self.body_graph = decode_body(body_genes)  # decode once on creation
+        self._body_graph = None  # Lazy load
         self.ctrl = ctrl_genes
-        self.num_joints = count_num_joints(self.body_graph)
-        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
+        self.num_joints = None  # Will be set on first body_graph access
+        self.input_size = None  # Will be set on first body_graph access
         self.fitness = (-999.0,)
         self.prev_num_joints = None
         self.limb_history = []  # record num_joints across evaluations
@@ -89,20 +76,43 @@ class Robot:
         self.disp = 0.0
         self.clone_num = 0
 
+    @property
+    def body_graph(self):
+        """Lazy load body graph only when needed."""
+        if self._body_graph is None:
+            self._body_graph = decode_body(self.body)
+            self.num_joints = count_num_joints(self._body_graph)
+            self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
+        return self._body_graph
+
     def update_body(self):
-        self.body_graph = decode_body(self.body)
-        self.num_joints = count_num_joints(self.body_graph)
-        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
+        """Regenerate body graph and resize controller after body mutation."""
+        self._body_graph = None  # Clear cache
+        
+        # Access property to trigger lazy load and update num_joints/input_size
+        _ = self.body_graph  # This updates self.num_joints and self.input_size
+        
+        # CRITICAL: Resize controller to match new morphology
+        required_len = genome_length(
+            self.input_size, HIDDEN_SIZE, self.num_joints,
+            depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+        )
+        
+        curr_len = len(self.ctrl)
+        
+        if curr_len < required_len:
+            # Pad with random values
+            self.ctrl += [random.uniform(-1.0, 1.0) for _ in range(required_len - curr_len)]
+        elif curr_len > required_len:
+            # Truncate excess genes
+            self.ctrl = self.ctrl[:required_len]
 
     def clone(self):
-        c = Robot(self.body.copy(), self.ctrl.copy())
+        c = Robot(self.body.copy(), self.ctrl.copy(), _from_clone=True)
 
-        # Restore original ID
+        # Copy parent ID
         c.id = self.id
         
-        # Roll back the class-wide counter increment
-        Robot._next_id -= 1 
-
         # Lineage tracking
         c.clone_num = self.clone_num + 1
 
@@ -112,21 +122,20 @@ class Robot:
         c.mutation_count = self.mutation_count
         c.gen_created = self.gen_created
         c.disp = self.disp
-        c.body_graph = self.body_graph  # keep cached body
+        c._body_graph = self._body_graph  # Share cached body
         c.num_joints = self.num_joints
         c.input_size = self.input_size
         return c
     
-    def record_limb_count(self, num_joints: int):
+    def record_limb_count(self, new_num_joints: int):
         """Log limb count and detect structural changes."""
-        self.prev_num_joints = self.num_joints
-
-        if self.prev_num_joints != num_joints:
+        if self.num_joints is not None and self.num_joints != new_num_joints:
             # CRITICAL: Limit history size to prevent memory growth
-            self.limb_history.append(num_joints)
-            if len(self.limb_history) > 50:  # Keep only last 100 evaluations
+            self.limb_history.append(new_num_joints)
+            if len(self.limb_history) > 50:  # Keep only last 50 evaluations
                 print(f"[INFO] Truncating limb history for bot: {self.id}.{self.clone_num}")
                 self.limb_history = self.limb_history[-50:]  # Trim to 50
+            self.prev_num_joints = self.num_joints
 
     def stats(self):
         return (f"Robot {self.id}.{self.clone_num} | "
@@ -134,7 +143,7 @@ class Robot:
                 f"mutations={self.mutation_count} | "
                 f"limbs={self.num_joints} | "
                 f"input_size={self.input_size} | "
-                f"evaluations={len(self.limb_history)} | "
+                f"len(limb_history)={len(self.limb_history)} | "
                 f"disp={self.disp:.1f}")
 
 # ===============================================================
@@ -160,6 +169,9 @@ def crossover_robots(bot1: Robot, bot2: Robot):
         new1 = bot1.ctrl[:cxp] + bot2.ctrl[cxp:L] + (bot1.ctrl[L:] if L1 > L else [])
         new2 = bot2.ctrl[:cxp] + bot1.ctrl[cxp:L] + (bot2.ctrl[L:] if L2 > L else [])
         bot1.ctrl, bot2.ctrl = new1, new2
+
+    bot1.update_body()
+    bot2.update_body()
     return bot1, bot2
 
 def mutate_robot(bot: Robot):
@@ -177,21 +189,18 @@ def mutate_robot(bot: Robot):
 
     if is_mutate:
         # After mutating the body, rebuild the morphology
-        # print(f"[MUTATION] Robot {self.id}.{self.clone_num} body mutated, rebuilding morphology.")
         bot.mutation_count += 1
-        # print(f"    HAD limbs: {bot.num_joints} and input_size: {bot.input_size}")
         bot.update_body()
-        # print(f"        NOW limbs: {bot.num_joints} and input_size: {bot.input_size}")
 
     return bot
 
 # ===============================================================
 # EVALUATION
 # ===============================================================
-def evaluate_robot(bot: Robot):
+def evaluate_robot(bot: Robot, duration=None):
     """Evaluate fitness with dynamic controller adjustment."""
     try:
-        robot_graph = bot.body_graph  # use cached graph
+        robot_graph = bot.body_graph  # use cached graph (triggers lazy load if needed)
 
         num_joints = count_num_joints(robot_graph)
         input_size = infer_input_size(num_joints, STATE_FEATURES)
@@ -199,16 +208,6 @@ def evaluate_robot(bot: Robot):
         # Resize controller if body changed
         required_len = genome_length(input_size, HIDDEN_SIZE, num_joints,
                                     depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
-
-        # --- DEBUG PRINTS ---
-        # print(f"\n[DEBUG] Robot evaluation info robot: {bot.id}")
-        # print(f"  num_joints = {num_joints}")
-        # print(f"  input_size = {input_size}")
-        # print(f"  required_len = {required_len}")
-        # print(f"  current_ctrl_len = {len(bot.ctrl)}")
-        # print(f"  BODY_GENE_LENGTH = {BODY_GENE_LENGTH}")
-        # print(f"  GENOTYPE_SIZE = {GENOTYPE_SIZE}")
-        # print(f"  NUM_OF_MODULES = {NUM_OF_MODULES}")
         
         ctrl_genes = bot.ctrl.copy()
         curr_len = len(ctrl_genes)
@@ -221,7 +220,7 @@ def evaluate_robot(bot: Robot):
             ctrl_genes = ctrl_genes[:required_len]
 
         # Simulate
-        traj = run_simulation(ctrl_genes, robot_graph)
+        traj = run_simulation(ctrl_genes, robot_graph, duration)
 
         # --- EARLY MOBILITY CHECK ---
         # sample 25%, 50%, 75% of the trajectory
@@ -245,9 +244,6 @@ def evaluate_robot(bot: Robot):
 
         # --- Otherwise compute full displacement and fitness ---
         disp = np.linalg.norm(traj[-1, [0, 1]] - traj[0, [0, 1]])
-
-        # print(f"  displacement = {disp:.3f} m")
-        # print("-----------------------------")
         
         # Compute fitness
         if disp < IMMOBILE_THRESH:
@@ -276,9 +272,10 @@ def evaluate_robot(bot: Robot):
             'ctrl_genes': bot.ctrl
         }
 
-def _eval_robot_helper(bot):
+def _eval_robot_helper(args):
     """Helper wrapper for multiprocessing pool.map."""
-    return evaluate_robot(bot)
+    bot, duration = args
+    return evaluate_robot(bot, duration)
 
 def tap_timer(timer_name: str = "Timer"):
     global timers
@@ -309,12 +306,8 @@ def print_summary_pop(pop, gen):
     # Only show top 3 and bottom 
     sorted_pop = sorted(pop, key=lambda b: b.fitness[0], reverse=True)
 
-    print("Top 3:")
-    for bot in sorted_pop[:3]:
-        print(f"  {bot.stats()}")
-
-    print("Bottom 3:")
-    for bot in sorted_pop[-3:]:
+    print("Sorted by fitness:")
+    for bot in sorted_pop:
         print(f"  {bot.stats()}")
 
 # ===============================================================
@@ -323,6 +316,7 @@ def print_summary_pop(pop, gen):
 def run_evolve_robot(
     seed: int | None = None,
 ):
+    global last_gen_time, last_gen_dur
     log = []
     if seed is not None:
         np.random.seed(seed); random.seed(seed)
@@ -359,9 +353,11 @@ def run_evolve_robot(
             MAX_DURATION
         )
         current_duration = int(current_duration)
-        cfg.DURATION = current_duration
 
-        print(f"\n===== Start of Generation {gen+1}/{NUM_GENS} (duration={current_duration}s)=====")
+        if current_duration > 60:
+            POOL_REFRESH_INTERVAL = 1
+
+        print(f"\n===== Start of Generation {gen+1}/{NUM_GENS} (curr_duration={current_duration}s)=====")
 
         # CRITICAL: Recreate pool periodically to prevent memory buildup
         if gen % POOL_REFRESH_INTERVAL == 0:
@@ -374,33 +370,19 @@ def run_evolve_robot(
             print(f"[MEMORY] Refreshed multiprocessing pool at generation {gen+1}")
 
         # Parallel evaluate
-        results = eval_map(_eval_robot_helper, [b for b in pop])
-
-        # Single core evaluate
-        # results = [evaluate_robot(bot, SPAWN_POS, TARGET_POS) for bot in pop]
+        results = eval_map(_eval_robot_helper, [(b, current_duration) for b in pop])
 
         # Update robots with results from workers
         for bot, result in zip(pop, results):
             bot.fitness = (result['fitness'],)
             bot.disp = result['disp']
             
-            # Update bot state from worker results
+            # FIXED: Record BEFORE updating
             if result['num_joints'] is not None:
                 bot.record_limb_count(result['num_joints'])
                 bot.num_joints = result['num_joints']
                 bot.input_size = result['input_size']
                 bot.ctrl = result['ctrl_genes']  # Update with potentially resized controller
-
-        # Replace immobile robots
-        for i, bot in enumerate(pop):
-            if bot.disp < IMMOBILE_THRESH:
-                old_id = bot.id
-                body = [random.uniform(-1, 1) for _ in range(BODY_GENE_LENGTH)]
-                ctrl = [random.uniform(-1, 1) for _ in range(100)]
-                pop[i] = Robot(body, ctrl)
-                pop[i].gen_created = gen
-                # if DEBUG_PROGRESS:
-                    # print(f"[!] Replacing immobile robot {old_id} with robot {pop[i].id} (disp={bot.disp:.3f})")
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary start generation ---")
@@ -447,7 +429,7 @@ def run_evolve_robot(
             gen_dir = plots_dir / f"generations"
             gen_dir.mkdir(parents=True, exist_ok=True)
 
-            plot_best_trajectory(best.ctrl, best.body_graph, gen_dir, out_name=f"trajectory_{gen}.png")
+            plot_best_trajectory(best.ctrl, best.body_graph, gen_dir, out_name=f"trajectory_{gen}.png", duration=current_duration)
 
         # Compute statistics (use quartiles for skewed distributions)
         fits_array = np.array([b.fitness[0] for b in pop])
@@ -470,7 +452,7 @@ def run_evolve_robot(
         print(f"Gen {gen + 1}: avg={float(avg_fit):.3f}, median={float(median_fit):.3f}, best={float(best_fit):.3f}")
 
         if SAVE_PLOTS:
-            if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1:
+            if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1 or gen == 0:
                 csv_path = DATA_PATH / "fitness_log.csv"
 
                 save_log_csv(log, csv_path)
@@ -485,14 +467,15 @@ def run_evolve_robot(
                     dest_dir=gen_dir,
                     pop=NUM_POP,
                     task=TASK,
-                    out_name=f"fitness_plot_gen_{gen+1}.png"
+                    out_name=f"fitness_plot_gen_{gen+1}.png",
+                    duration=current_duration
                 )
 
             gc.collect()
 
         print("\n")
         new_gen_time = tap_timer("one generation")
-        print(f"    Gen duration increased by {current_duration - last_gen_dur}, time took to run gen increased by: {new_gen_time - last_gen_time}")
+        print(f"    Gen duration increased by {current_duration - last_gen_dur} to total: {current_duration}, time took to run gen increased by: {new_gen_time - last_gen_time}")
         last_gen_time = new_gen_time
         last_gen_dur = current_duration
         print("\n")
@@ -524,20 +507,21 @@ def run_evolve_robot(
             dest_dir=DATA_PATH,
             pop=NUM_POP,
             task=TASK,
-            out_name="fitness_plot.png"
+            out_name="fitness_plot.png",
+            duration=MAX_DURATION
         )
 
     if SAVE_PLOTS:
         tap_timer("best_trajectory")
-        plot_best_trajectory(best_robot.ctrl, best_robot.body_graph, plots_dir)
+        plot_best_trajectory(best_robot.ctrl, best_robot.body_graph, plots_dir, duration=MAX_DURATION)
         tap_timer("best_trajectory")
 
         tap_timer("best_fitness_over_time")
-        plot_best_fitness_over_time(best_robot.ctrl, best_robot.body_graph, plots_dir)
+        plot_best_fitness_over_time(best_robot.ctrl, best_robot.body_graph, plots_dir, duration=MAX_DURATION)
         tap_timer("best_fitness_over_time")
 
 if __name__ == "__main__":
     tap_timer("Total")
     run_evolve_robot()
     tap_timer("Total")
-    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, max duration: {cfg.DURATION}")
+    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, max duration: {MAX_DURATION}")

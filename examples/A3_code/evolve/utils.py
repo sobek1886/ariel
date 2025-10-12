@@ -10,7 +10,7 @@ from ariel.utils.runners import simple_runner
 from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from examples.A3_code.evolve.nn import make_controller_from_genome, decode_genome, build_controller, infer_input_size
-from examples.A3_code.evolve.config import DURATION, SPAWN_POS, TARGET_POS, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, STATE_FEATURES
+from examples.A3_code.evolve.config import SPAWN_POS, TARGET_POS, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, STATE_FEATURES
 from examples.A3_code.evolve.fitness import olympic_arena_fitness
 
 def count_num_joints(robot_graph):
@@ -30,7 +30,7 @@ def make_world():
     return world
 
 # === Helper: run_simulation (reuses common setup) ===
-def run_simulation(ctrl_genes, robot_graph):
+def run_simulation(ctrl_genes, robot_graph, duration=None):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
     world.spawn(core.spec, list(SPAWN_POS))
@@ -46,7 +46,7 @@ def run_simulation(ctrl_genes, robot_graph):
         controller.tracker.setup(world.spec, data)
 
     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
-    simple_runner(model, data, duration=DURATION)
+    simple_runner(model, data, duration=duration)
 
     # Convert to array ONCE
     traj = np.array(tracker.history["xpos"][0], dtype=np.float32)
@@ -88,7 +88,7 @@ def save_log_csv(log, csv_path: Path):
 
 
 # === Plotting ===
-def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png"):
+def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png", duration=None):
     
     gens = [rec["gen"] for rec in log]
     avg  = np.array([rec["avg"] for rec in log])
@@ -114,7 +114,7 @@ def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot
     
     plt.xlabel("Generation", fontsize=12)
     plt.ylabel("Fitness", fontsize=12)
-    plt.title(f"{task.upper()} Evolution\n(pop={pop}, duration={DURATION}s", fontsize=12)
+    plt.title(f"{task.upper()} Evolution\n(pop={pop}, duration={duration}s", fontsize=12)
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     
@@ -130,9 +130,10 @@ def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot
 
 def plot_best_trajectory(
     genome, robot_graph, plots_dir: Path,
-    out_name: str = "trajectory.png"
+    out_name: str = "trajectory.png",
+    duration=None
 ):
-    traj = run_simulation(genome, robot_graph)
+    traj = run_simulation(genome, robot_graph, duration)
     
     # SPEED UP: Subsample trajectory (plot every 10th point)
     traj_subsampled = traj[::10]  # Every 10th point
@@ -145,13 +146,13 @@ def plot_best_trajectory(
     print(f"Start: {start}, end: {end}")
 
     plt.figure(figsize=(8, 5))
-    plt.plot(traj_subsampled[:,0], traj_subsampled[:,1], "b-", label="Trajectory (XZ)")
+    plt.plot(traj_subsampled[:,0], traj_subsampled[:,1], "b-", label="Trajectory (XY)")
     plt.scatter(traj[0,0], traj[0,1], c="g", marker="o", label="Start")
     plt.scatter(traj[-1,0], traj[-1,1], c="r", marker="x", label="End")
-    plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XZ)")
+    plt.scatter(TARGET_POS[0], TARGET_POS[1], c="k", marker="*", label="Target (XY)")
     plt.xlabel("X"); plt.ylabel("Z")
     fitness = olympic_arena_fitness(traj)
-    plt.title(f"Best Controller Trajectory (XZ projection) fit={fitness}, dur={DURATION}s")
+    plt.title(f"Best Controller Trajectory (XY projection) fit={fitness}, dur={duration}s")
     plt.legend(); plt.grid(True)
     plt.savefig(plots_dir / out_name); plt.close()
 
@@ -231,14 +232,14 @@ def compute_all_fitness_curves(traj, step: int = 100):
 def plot_best_fitness_over_time(
     genome, robot_graph, plots_dir: Path,
     out_name_combined: str = "fitness_over_time_combined.png",
-    step: int = 250
+    step: int = 250, duration=None
 ):
     """
     Plot fitness progression over time for ALL fitness functions.
     Creates individual plots for each function and one combined plot.
     """
     # Run simulation
-    traj = run_simulation(genome, robot_graph)
+    traj = run_simulation(genome, robot_graph, duration=duration)
 
     # Compute all fitness curves
     timesteps, all_fitness = compute_all_fitness_curves(traj, step)
@@ -280,7 +281,7 @@ def plot_best_fitness_over_time(
     
     plt.xlabel("Timestep", fontsize=12)
     plt.ylabel("Fitness", fontsize=12)
-    plt.title(f"All Fitness Functions Comparison step={step}, dur={DURATION}", fontsize=14)
+    plt.title(f"All Fitness Functions Comparison step={step}, dur={duration}", fontsize=14)
     plt.legend(fontsize=10, loc='best')
     plt.grid(True, alpha=0.3)
     plt.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1)

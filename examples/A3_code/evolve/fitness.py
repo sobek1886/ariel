@@ -2,12 +2,36 @@ import numpy as np
 from typing import List, Tuple
 from examples.A3_code.evolve.config import TARGET_POS, SPAWN_POS
 
-# Define a global target position (can be changed if needed)
+# CRITICAL: Ground level and fall thresholds
+GROUND_LEVEL = 0.0
+FALL_THRESHOLD = -0.5  # Below this Z value = catastrophic failure
+SAFE_HEIGHT_MAX = 3.0   # Maximum reasonable height (prevents flying abuse)
+
+
+def check_fall_penalty(pos_history: List[List[float]]) -> float:
+    """
+    Check if robot fell through the floor or went out of bounds.
+    Returns a penalty value (0 if no fall, negative if fell).
+    """
+    min_z = min(pos[2] for pos in pos_history)
+    final_z = pos_history[-1][2]
+    
+    # Catastrophic fall through floor
+    if min_z < FALL_THRESHOLD:
+        return -1000.0 + min_z  # Gets worse the further you fall
+    
+    # Robot flying unreasonably high (exploit prevention)
+    if final_z > SAFE_HEIGHT_MAX:
+        return -100.0 - (final_z - SAFE_HEIGHT_MAX) * 10.0
+    
+    return 0.0  # No penalty
+
 
 def dist_to_target(history: List[List[float]]) -> float:
     """
     Compute fitness based on final distance to the target.
-
+    NOW WITH FALL PROTECTION!
+    
     Parameters
     ----------
     history : List[List[float]]
@@ -19,6 +43,11 @@ def dist_to_target(history: List[List[float]]) -> float:
     float
         Fitness score (negative distance to target).
     """
+    # Check for falls first
+    fall_penalty = check_fall_penalty(history)
+    if fall_penalty < 0:
+        return fall_penalty
+    
     xt, yt, zt = TARGET_POS
     xc, yc, zc = history[-1]  # final position of the robot
 
@@ -28,9 +57,11 @@ def dist_to_target(history: List[List[float]]) -> float:
     )
     return -cartesian_distance
 
+
 def forward_progress_fitness(pos_history: List[List[float]]) -> float:
     """
     Fitness based on forward progress with speed bonus.
+    NOW WITH FALL PROTECTION!
     
     Best for Olympic Arena because:
     - Rewards moving toward the goal (not just distance)
@@ -45,6 +76,11 @@ def forward_progress_fitness(pos_history: List[List[float]]) -> float:
     """
     if len(pos_history) < 2:
         return -999.0
+    
+    # CRITICAL: Check for falls first
+    fall_penalty = check_fall_penalty(pos_history)
+    if fall_penalty < 0:
+        return fall_penalty
     
     start_pos = np.array(SPAWN_POS)
     target_pos = np.array(TARGET_POS)
@@ -84,6 +120,7 @@ def forward_progress_fitness(pos_history: List[List[float]]) -> float:
 def distance_to_target_improved(pos_history: List[List[float]]) -> float:
     """
     Improved dense reward with better balance and anti-jittering.
+    NOW WITH FALL PROTECTION!
     
     Args:
         pos_history: List of [x, y, z] positions over time
@@ -93,6 +130,11 @@ def distance_to_target_improved(pos_history: List[List[float]]) -> float:
     """
     if len(pos_history) < 2:
         return -999.0
+    
+    # CRITICAL: Check for falls first
+    fall_penalty = check_fall_penalty(pos_history)
+    if fall_penalty < 0:
+        return fall_penalty
     
     target_pos = np.array(TARGET_POS)
     fitness = 0.0
@@ -135,6 +177,7 @@ def distance_to_target_improved(pos_history: List[List[float]]) -> float:
 def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     """
     Specialized fitness for Olympic Arena terrain (flat → rough → uphill).
+    NOW WITH FALL PROTECTION AND PROPER 3D DISTANCE!
     
     Gives extra rewards for passing terrain checkpoints.
     
@@ -147,6 +190,11 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     if len(pos_history) < 2:
         return -999.0
     
+    # CRITICAL: Check for falls first
+    fall_penalty = check_fall_penalty(pos_history)
+    if fall_penalty < 0:
+        return fall_penalty
+    
     start_pos = np.array(SPAWN_POS)
     target_pos = np.array(TARGET_POS)
     final_pos = np.array(pos_history[-1])
@@ -158,9 +206,9 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     
     fitness = 0.0
     
-    # 1. Base progress reward
-    initial_dist = np.linalg.norm(target_pos[:2] - start_pos[:2])  # 2D distance
-    final_dist = np.linalg.norm(target_pos[:2] - final_pos[:2])
+    # 1. Base progress reward (FIXED: now uses full 3D distance)
+    initial_dist = np.linalg.norm(target_pos - start_pos)  # 3D distance
+    final_dist = np.linalg.norm(target_pos - final_pos)    # 3D distance
     progress = initial_dist - final_dist
     fitness += progress * 2.0  # doubled weight for progress
     
@@ -176,8 +224,13 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
             fitness += 10.0  # Almost at finish
     
     # 3. Height bonus (reward for climbing uphill section)
-    height_gain = max(0, final_pos[2] - start_pos[2])
-    fitness += height_gain * 2.0
+    # But penalize if height is unreasonable
+    height_gain = final_pos[2] - start_pos[2]
+    if 0 <= height_gain <= 1.5:  # Reasonable climbing
+        fitness += height_gain * 2.0
+    elif height_gain > 1.5:  # Too high (possibly exploiting physics)
+        fitness -= (height_gain - 1.5) * 5.0
+    # Negative height_gain already caught by fall penalty
     
     # 4. Final distance bonus
     if final_dist < 0.5:
@@ -193,10 +246,16 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
 def hybrid_fitness(pos_history: List[List[float]]) -> float:
     """
     Combination of multiple fitness components for robust evolution.
+    NOW WITH FALL PROTECTION!
     
     Recommended for final submission.
     """
-    # Get individual fitness scores
+    # Check for falls ONCE (efficient)
+    fall_penalty = check_fall_penalty(pos_history)
+    if fall_penalty < 0:
+        return fall_penalty
+    
+    # Get individual fitness scores (they won't re-check for falls)
     progress_score = forward_progress_fitness(pos_history)
     dense_score = distance_to_target_improved(pos_history)
     terrain_score = olympic_arena_fitness(pos_history)
@@ -211,7 +270,7 @@ def hybrid_fitness(pos_history: List[List[float]]) -> float:
     return fitness
 
 
-# 1. Start with: distance_to_target_improved (good baseline)
+# 1. Start with: distance_to_target_improved (good baseline with fall protection)
 # 2. Experiment with: forward_progress_fitness (if robots get stuck)
 # 3. Fine-tune with: olympic_arena_fitness (terrain-aware)
 # 4. Final submission: hybrid_fitness (most robust)

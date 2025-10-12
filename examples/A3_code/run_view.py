@@ -7,6 +7,7 @@ from mujoco import viewer
 from pathlib import Path
 from typing import Any, Literal, TYPE_CHECKING
 import networkx as nx
+import time
 
 from ariel import console
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
@@ -121,6 +122,66 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
     world.spawn(robot.spec, SPAWN_POS)
 
     #place ball
+    # Add target marker
+    world.spec.worldbody.add_site(
+        name="target_site",
+        pos=[TARGET_POS[0], TARGET_POS[1], TARGET_POS[2]],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    
+    world.spec.worldbody.add_site(
+        name="flat_start",
+        pos=[-1.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    
+    world.spec.worldbody.add_site(
+        name="flat_finish",
+        pos=[0.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    world.spec.worldbody.add_site(
+        name="rug_start",
+        pos=[1.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    world.spec.worldbody.add_site(
+        name="rug_finish",
+        pos=[2.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    world.spec.worldbody.add_site(
+        name="inc_start",
+        pos=[3.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    world.spec.worldbody.add_site(
+        name="inc_finish",
+        pos=[4.5, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    world.spec.worldbody.add_site(
+        name="finish_start",
+        pos=[4.7, 0, 0],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+        )
+    
 
     model = world.spec.compile()
     data = mj.MjData(model)
@@ -147,6 +208,7 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
             viewer.launch(model=model, data=data)
 
 def main() -> None:
+    start_time = time.time()
     # --- Load saved robot graph ---
     robot_graph, controller_weights = load_robot(DATA_PATH)
     core = construct_mjspec_from_graph(robot_graph)
@@ -179,8 +241,9 @@ def main() -> None:
     genome.extend(np.ravel(controller_weights["w3"]))
     genome.extend(controller_weights["b3"])
 
-    plot_best_trajectory(genome, robot_graph, debug_dir)
-    plot_best_fitness_over_time(genome, robot_graph, debug_dir)
+    total_time_run = int(time.time() - start_time)
+    plot_best_trajectory(genome, robot_graph, debug_dir, duration=total_time_run)
+    plot_best_fitness_over_time(genome, robot_graph, debug_dir, duration=total_time_run)
 
     print(f"Last pos: {history[-1]}")
 

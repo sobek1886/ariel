@@ -11,19 +11,18 @@ MUT_SIGMA, MUT_INDPB = 0.2, 0.1
 CX_PROB, MUT_PROB = 0.5, 0.3
 TOURNAMENT_SIZE = 5
 
-DURATION = 10
-NUM_POP = 200
-NUM_GENS = 300
+NUM_POP = 20
+NUM_GENS = 3
 
 # Dynamic duration: start short, increase over time
 BASE_DURATION = 10
-MAX_DURATION = 310
+MAX_DURATION = 60
 DURATION_RAMP_GENS = NUM_GENS  # Reach max at generation
 
 STATE_SET = "rich"
 TASK = "nav"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "big_run_last"
+DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "big_run_FINAL"
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"
