@@ -1,8 +1,13 @@
 import numpy as np
 from typing import Optional, Sequence, Iterable
 from ariel.simulation.controllers.controller import Controller
+from examples.A3_code.evolve.cpg_controller import (
+    CPGController, HybridCPGController, 
+    cpg_genome_length, hybrid_cpg_genome_length
+)
+from examples.A3_code.evolve.config import USE_CPG, CPG_HYBRID
 from examples.A3_code.evolve.config import (
-    STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, TARGET_POS, STATE_FEATURES_RICH, STATE_FEATURES_MINIMAL
+    STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, TARGET_POS, STATE_FEATURES_RICH, STATE_FEATURES_MINIMAL, USE_LAYER_NORM
 )
 
 def _decode_1layer(genome: np.ndarray, input_size: int, hidden_size: int, output_size: int):
@@ -74,6 +79,7 @@ def build_controller(
     *,
     depth: int = 1,
     hidden_size2: Optional[int] = None,
+    use_layer_norm: bool = True,  # NEW
 ):
     """
     Returns a controller function(state) -> action using decoded weights.
@@ -90,16 +96,28 @@ def build_controller(
         return controller
 
     elif depth == 2:
-        if hidden_size2 is None:
-            raise ValueError("build_controller(depth=2) requires hidden_size2.")
         w1, b1, w2, b2, w3, b3 = decode_genome(
-            genome, input_size, hidden_size, output_size, depth=2, hidden_size2=hidden_size2
+            genome, input_size, hidden_size, output_size, 
+            depth=2, hidden_size2=hidden_size2
         )
+        
         def controller(state: np.ndarray) -> np.ndarray:
-            h1 = np.tanh(np.dot(state, w1) + b1)
-            h2 = np.tanh(np.dot(h1, w2) + b2)
+            # Layer 1
+            h1 = np.dot(state, w1) + b1
+            if use_layer_norm:
+                h1 = (h1 - np.mean(h1)) / (np.std(h1) + 1e-8)
+            h1 = np.tanh(h1)
+            
+            # Layer 2
+            h2 = np.dot(h1, w2) + b2
+            if use_layer_norm:
+                h2 = (h2 - np.mean(h2)) / (np.std(h2) + 1e-8)
+            h2 = np.tanh(h2)
+            
+            # Output
             out = np.tanh(np.dot(h2, w3) + b3)
             return out * (np.pi / 2)
+        
         return controller
 
     else:
@@ -138,6 +156,7 @@ def make_controller_from_genome(
     *,
     target_pos=TARGET_POS,
     record_pos: list[np.ndarray] | None = None,
+    record_vel: list[np.ndarray] | None = None,  # ADD THIS
     ctrl_every: int = 1,
     save_every: int = 1,
     alpha: float = 1.0,
@@ -151,7 +170,8 @@ def make_controller_from_genome(
     input_size = infer_input_size(num_joints, STATE_FEATURES)
     action_fn = build_controller(
         genome, input_size, HIDDEN_SIZE, num_joints,
-        depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+        depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2,
+        use_layer_norm=USE_LAYER_NORM
     )
 
     def _callback(model, data):
@@ -160,6 +180,8 @@ def make_controller_from_genome(
         ).astype(np.float32)
         if record_pos is not None:
             record_pos.append(data.qpos[:3].copy())
+        if record_vel is not None:  # ADD THIS
+            record_vel.append(data.qvel[:3].copy())
         return action_fn(state)
 
     return Controller(
@@ -170,6 +192,58 @@ def make_controller_from_genome(
         tracker=tracker,
     )
 
+def make_cpg_controller_from_genome(
+    genome,
+    num_joints: int,
+    *,
+    target_pos=TARGET_POS,
+    record_pos: list[np.ndarray] | None = None,
+    record_vel: list[np.ndarray] | None = None,
+    ctrl_every: int = 1,
+    save_every: int = 1,
+    alpha: float = 1.0,
+    tracker=None,
+    use_hybrid: bool = True,
+) -> Controller:
+    """Create CPG-based controller"""
+    
+    if use_hybrid:
+        input_size = infer_input_size(num_joints, STATE_FEATURES)
+        cpg_ctrl = HybridCPGController(
+            np.array(genome, dtype=np.float32), 
+            num_joints, 
+            input_size
+        )
+        
+        def _callback(model, data):
+            state = get_state_vector(
+                data, num_joints, STATE_FEATURES
+            ).astype(np.float32)
+            if record_pos is not None:
+                record_pos.append(data.qpos[:3].copy())
+            if record_vel is not None:
+                record_vel.append(data.qvel[:3].copy())
+            return cpg_ctrl.control(state)
+    else:
+        cpg_ctrl = CPGController(
+            np.array(genome, dtype=np.float32), 
+            num_joints
+        )
+        
+        def _callback(model, data):
+            if record_pos is not None:
+                record_pos.append(data.qpos[:3].copy())
+            if record_vel is not None:
+                record_vel.append(data.qvel[:3].copy())
+            return cpg_ctrl.step()
+    
+    return Controller(
+        controller_callback_function=_callback,
+        time_steps_per_ctrl_step=ctrl_every,
+        time_steps_per_save=save_every,
+        alpha=alpha,
+        tracker=tracker,
+    )
 
 def make_controller_from_weights(
     weights: dict[str, np.ndarray],
@@ -267,3 +341,17 @@ def get_state_vector(
         parts.append(data.qfrc_actuator[:num_joints]) # actuator forces per joint
 
     return np.concatenate([np.asarray(p, dtype=np.float32) for p in parts])
+
+
+def cpg_genome_length(num_joints: int) -> int:
+    """Calculate required genome length for CPG"""
+    return num_joints * (3 + num_joints)  # freq, amp, phase, coupling
+
+def hybrid_cpg_genome_length(num_joints: int, state_size: int) -> int:
+    """Calculate genome length for Hybrid CPG+MLP"""
+    cpg_size = cpg_genome_length(num_joints)
+    mlp_hidden = 32
+    mlp_size = (state_size * mlp_hidden + mlp_hidden + 
+               mlp_hidden * num_joints + num_joints)
+    return cpg_size + mlp_size
+

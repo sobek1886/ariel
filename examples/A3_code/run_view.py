@@ -20,7 +20,10 @@ from examples.A3_code.evolve.fitness import fitness_function, distance_to_target
 from examples.A3_code.evolve.nn import make_controller_from_weights
 from examples.A3_code.evolve.config import DATA_PATH, SPAWN_POS, TARGET_POS, TASK
 from examples.A3_code.evolve.utils import load_robot
-
+from examples.A3_code.evolve.nn import (
+    make_controller_from_weights,
+    make_cpg_controller_from_genome  # ADD THIS
+)
 if TYPE_CHECKING:
     from networkx import DiGraph
 
@@ -59,7 +62,7 @@ def show_xpos_history(history: list[float]) -> None:
     single_frame_renderer(
         model,
         data,
-        camera=camera,
+        camera,
         save_path=save_path,
         save=True,
     )
@@ -115,17 +118,82 @@ def show_xpos_history(history: list[float]) -> None:
 
     # plt.show()
 
-def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
+# def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
+
+#     mj.set_mjcb_control(None)
+#     world = OlympicArena()
+#     world.spawn(robot.spec, SPAWN_POS)
+#     # ===== ADD TARGET MARKER =====
+#     world.spec.worldbody.add_site(
+#         name="target_site",
+#         pos=[TARGET_POS[0], TARGET_POS[1], TARGET_POS[2]],
+#         size=[0.1, 0.1, 0.1],  # Size of the sphere
+#         rgba=[1, 0, 0, 1],     # Red color (RGBA)
+#         type=mj.mjtGeom.mjGEOM_SPHERE,
+#     )
+#     model = world.spec.compile()
+#     data = mj.MjData(model)
+#     mj.mj_resetData(model, data)
+
+#     num_joints = model.nu
+    
+#     controller = make_controller_from_weights(weights, num_joints, tracker=tracker)
+
+#     if controller.tracker is not None:
+#         controller.tracker.setup(world.spec, data)
+
+#     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+
+#     match mode:
+#         case "simple":
+#             simple_runner(model, data, duration=duration)
+#         case "frame":
+#             save_path = str(DATA / "robot.png")
+#             single_frame_renderer(model, data, save=True, save_path=save_path)
+#         case "video":
+#             video_recorder = VideoRecorder(output_folder=str(DATA / "videos"))
+#             video_renderer(model, data, duration=duration, video_recorder=video_recorder)
+#         case "launcher":
+#             viewer.launch(model=model, data=data)
+
+def experiment(robot: Any, controller_data, tracker=None, duration: int = 15, mode: ViewerTypes = "launcher") -> None:
+    from examples.A3_code.evolve.nn import make_cpg_controller_from_genome
+    
     mj.set_mjcb_control(None)
     world = OlympicArena()
-    world.spawn(robot.spec, spawn_position=SPAWN_POS)
-
+    world.spawn(robot.spec)  # FIXED - no position parameter
+    
+    # Add target marker
+    world.spec.worldbody.add_site(
+        name="target_site",
+        pos=[TARGET_POS[0], TARGET_POS[1], TARGET_POS[2]],
+        size=[0.1, 0.1, 0.1],
+        rgba=[1, 0, 0, 1],
+        type=mj.mjtGeom.mjGEOM_SPHERE,
+    )
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
 
     num_joints = model.nu
-    controller = make_controller_from_weights(weights, num_joints, tracker=tracker)
+    
+    # Check controller type and create appropriate controller
+    controller_type = controller_data.get("type", "MLP")
+    
+    if controller_type in ["CPG", "CPG_HYBRID"]:
+        # Use CPG controller
+        genome = controller_data["genome"]
+        controller = make_cpg_controller_from_genome(
+            genome, num_joints, tracker=tracker, 
+            use_hybrid=(controller_type == "CPG_HYBRID")
+        )
+        print(f"✅ Using {controller_type} controller")
+    else:
+        # Use MLP controller (original behavior)
+        controller = make_controller_from_weights(
+            controller_data, num_joints, tracker=tracker
+        )
+        print(f"✅ Using MLP controller")
 
     if controller.tracker is not None:
         controller.tracker.setup(world.spec, data)
@@ -144,20 +212,49 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
         case "launcher":
             viewer.launch(model=model, data=data)
 
+# def main() -> None:
+#     # --- Load saved robot graph ---
+#     robot_graph, controller_weights = load_robot(DATA_PATH)
+#     core = construct_mjspec_from_graph(robot_graph)
+
+#     # --- Tracker ---
+#     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+
+#     # --- DEBUG controller weights ---
+#     print("DEBUG: Loaded graph has", len(robot_graph.nodes()), "nodes and", len(robot_graph.edges()), "edges")
+#     print("DEBUG: Loaded controller weight keys:", controller_weights.keys())
+
+#     # --- Run experiment ---
+#     experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
+
+#     history = tracker.history["xpos"][0]
+#     show_xpos_history(history)
+    
+#     if TASK.lower() == "nav":
+#         fitness = distance_to_target(history)
+#     else:
+#         fitness = fitness_function(history)
+#     console.log(f"Fitness of generated robot: {fitness}")
+
+# if __name__ == "__main__":
+#     main()
+
+
 def main() -> None:
-    # --- Load saved robot graph ---
-    robot_graph, controller_weights = load_robot(DATA_PATH)
+    # Load saved robot
+    robot_graph, controller_data = load_robot(DATA_PATH)  # Changed variable name
     core = construct_mjspec_from_graph(robot_graph)
 
-    # --- Tracker ---
+    # Tracker
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
 
-    # --- DEBUG controller weights ---
+    # Debug
     print("DEBUG: Loaded graph has", len(robot_graph.nodes()), "nodes and", len(robot_graph.edges()), "edges")
-    print("DEBUG: Loaded controller weight keys:", controller_weights.keys())
+    print("DEBUG: Controller type:", controller_data.get("type", "MLP"))
+    print("DEBUG: Controller keys:", controller_data.keys())
 
-    # --- Run experiment ---
-    experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
+    # Run experiment - pass controller_data instead of weights
+    experiment(robot=core, controller_data=controller_data, tracker=tracker, mode="launcher")
 
     history = tracker.history["xpos"][0]
     show_xpos_history(history)
@@ -168,5 +265,5 @@ def main() -> None:
         fitness = fitness_function(history)
     console.log(f"Fitness of generated robot: {fitness}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  # ADD THIS!
+    main()                   # ADD THIS!

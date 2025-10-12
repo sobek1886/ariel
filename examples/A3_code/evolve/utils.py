@@ -29,28 +29,93 @@ def make_world():
     world = OlympicArena()
     return world
 
-# === Helper: run_simulation (reuses common setup) ===
+# # === Helper: run_simulation (reuses common setup) ===
+# def run_simulation(genome, robot_graph):
+#     world = make_world()
+#     core = construct_mjspec_from_graph(robot_graph)
+#     world.spawn(core.spec, list(SPAWN_POS))
+#     model = world.spec.compile()
+#     data = mj.MjData(model)
+#     mj.mj_resetData(model, data)
+
+#     num_joints = model.nu
+#     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+
+#     controller = make_controller_from_genome(genome, num_joints, tracker=tracker)
+#     if controller.tracker is not None:
+#         controller.tracker.setup(world.spec, data)
+
+#     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+#     simple_runner(model, data, duration=DURATION)
+
+#     traj = np.array(tracker.history["xpos"][0])
+#     return traj, model, data, tracker, controller
 def run_simulation(genome, robot_graph):
+    """Build world, run simulation, return trajectory and model data."""
+    import random
+    from examples.A3_code.evolve.config import (
+        USE_CPG, CPG_HYBRID, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH, STATE_FEATURES
+    )
+    from examples.A3_code.evolve.nn import (
+        make_controller_from_genome, 
+        make_cpg_controller_from_genome,
+        infer_input_size,
+        genome_length,
+        cpg_genome_length,
+        hybrid_cpg_genome_length
+    )
+    
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
+    world.spawn(core.spec)  # FIXED - no position parameter
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
 
     num_joints = model.nu
+    input_size = infer_input_size(num_joints, STATE_FEATURES)
+    
+    # Calculate required controller length based on type
+    if USE_CPG:
+        if CPG_HYBRID:
+            required_len = hybrid_cpg_genome_length(num_joints, input_size)
+        else:
+            required_len = cpg_genome_length(num_joints)
+    else:
+        required_len = genome_length(
+            input_size, HIDDEN_SIZE, num_joints,
+            depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+        )
+    
+    # Resize genome if needed (same logic as evaluate_robot)
+    ctrl_genes = list(genome)
+    if len(ctrl_genes) != required_len:
+        print(f"⚠️ Resizing controller for plotting: {len(ctrl_genes)} → {required_len}")
+        if len(ctrl_genes) < required_len:
+            padding = [random.uniform(-0.1, 0.1) for _ in range(required_len - len(ctrl_genes))]
+            ctrl_genes = ctrl_genes + padding
+        else:
+            ctrl_genes = ctrl_genes[:required_len]
+    
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
-
-    controller = make_controller_from_genome(genome, num_joints, tracker=tracker)
+    
+    # Choose controller type based on config
+    if USE_CPG:
+        controller = make_cpg_controller_from_genome(
+            ctrl_genes, num_joints, tracker=tracker, use_hybrid=CPG_HYBRID
+        )
+    else:
+        controller = make_controller_from_genome(
+            ctrl_genes, num_joints, tracker=tracker
+        )
+    
     if controller.tracker is not None:
         controller.tracker.setup(world.spec, data)
-
     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
     simple_runner(model, data, duration=DURATION)
-
     traj = np.array(tracker.history["xpos"][0])
+    
     return traj, model, data, tracker, controller
-
 
 # === Log saving ===
 def save_log_csv(log, csv_path: Path):
@@ -207,40 +272,109 @@ def plot_best_fitness_over_time_OG(
     plt.savefig(plots_dir / out_name); plt.close()
 
 # === Save/Load Robot ===
+# def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints):
+#     robot_path = dest_dir / "robot.json"
+
+#     graph_data = nx.node_link_data(robot_graph, edges="links")
+
+#     if NN_DEPTH == 1:
+#         w1, b1, w2, b2 = decode_genome(ctrl_genes, input_size, HIDDEN_SIZE, num_joints, depth=1)
+#         controller_data = {"w1": w1.tolist(), "b1": b1.tolist(), "w2": w2.tolist(), "b2": b2.tolist()}
+#     else:
+#         w1, b1, w2, b2, w3, b3 = decode_genome(
+#             ctrl_genes, input_size, HIDDEN_SIZE, num_joints, depth=2, hidden_size2=HIDDEN_SIZE2
+#         )
+#         controller_data = {
+#             "w1": w1.tolist(), "b1": b1.tolist(),
+#             "w2": w2.tolist(), "b2": b2.tolist(),
+#             "w3": w3.tolist(), "b3": b3.tolist(),
+#         }
+
+#     data = {"graph": graph_data, "controller": controller_data}
+#     with open(robot_path, "w") as f:
+#         json.dump(data, f)
+#     print(f"Saved robot to {robot_path}")
 def save_robot(dest_dir: Path, robot_graph, ctrl_genes, input_size, num_joints):
+    """Save robot body and controller to a single robot.json file."""
+    from examples.A3_code.evolve.config import USE_CPG, CPG_HYBRID, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH
+    
+    dest_dir.mkdir(parents=True, exist_ok=True)
     robot_path = dest_dir / "robot.json"
-
+    
+    # Save body graph
     graph_data = nx.node_link_data(robot_graph, edges="links")
-
-    if NN_DEPTH == 1:
-        w1, b1, w2, b2 = decode_genome(ctrl_genes, input_size, HIDDEN_SIZE, num_joints, depth=1)
-        controller_data = {"w1": w1.tolist(), "b1": b1.tolist(), "w2": w2.tolist(), "b2": b2.tolist()}
-    else:
-        w1, b1, w2, b2, w3, b3 = decode_genome(
-            ctrl_genes, input_size, HIDDEN_SIZE, num_joints, depth=2, hidden_size2=HIDDEN_SIZE2
-        )
+    
+    # Save controller based on type
+    if USE_CPG:
+        # For CPG, save the raw genome
         controller_data = {
-            "w1": w1.tolist(), "b1": b1.tolist(),
-            "w2": w2.tolist(), "b2": b2.tolist(),
-            "w3": w3.tolist(), "b3": b3.tolist(),
+            "type": "CPG_HYBRID" if CPG_HYBRID else "CPG",
+            "genome": ctrl_genes,
+            "num_joints": num_joints,
+            "input_size": input_size
         }
-
-    data = {"graph": graph_data, "controller": controller_data}
+        print(f"Saved CPG controller with {len(ctrl_genes)} parameters")
+    else:
+        # For MLP, decode and save weights
+        if NN_DEPTH == 1:
+            w1, b1, w2, b2 = decode_genome(
+                ctrl_genes, input_size, HIDDEN_SIZE, num_joints, depth=1
+            )
+            controller_data = {
+                "type": "MLP_1layer",
+                "w1": w1.tolist(), 
+                "b1": b1.tolist(), 
+                "w2": w2.tolist(), 
+                "b2": b2.tolist(),
+                "num_joints": num_joints,
+                "input_size": input_size
+            }
+        else:
+            w1, b1, w2, b2, w3, b3 = decode_genome(
+                ctrl_genes, input_size, HIDDEN_SIZE, num_joints, 
+                depth=2, hidden_size2=HIDDEN_SIZE2
+            )
+            controller_data = {
+                "type": "MLP_2layer",
+                "w1": w1.tolist(),
+                "b1": b1.tolist(),
+                "w2": w2.tolist(),
+                "b2": b2.tolist(),
+                "w3": w3.tolist(),
+                "b3": b3.tolist(),
+                "num_joints": num_joints,
+                "input_size": input_size
+            }
+        print(f"Saved MLP controller weights")
+    
+    # Combine everything into one file
+    data = {
+        "graph": graph_data, 
+        "controller": controller_data
+    }
+    
     with open(robot_path, "w") as f:
-        json.dump(data, f)
-    print(f"Saved robot to {robot_path}")
+        json.dump(data, f, indent=2)
+    
+    print(f"✅ Saved robot to {robot_path}")
+
+
 
 
 def load_robot(dir_path: Path):
+    
+    """Load robot from robot.json file - works with both MLP and CPG controllers."""
     robot_path = dir_path / "robot.json"
+
     with open(robot_path, "r") as f:
         data = json.load(f)
+    
     robot_graph = nx.node_link_graph(data["graph"], edges="links")
-    controller_weights = data["controller"]
-
-    # num_joints = count_num_joints(robot_graph)
-    # input_size = infer_input_size(num_joints, STATE_FEATURES)
-
-    # controller = build_controller(controller_data, input_size, HIDDEN_SIZE, num_joints,
-    #                               depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
-    return robot_graph, controller_weights
+    controller_data = data["controller"]
+    
+    # Check controller type
+    controller_type = controller_data.get("type", "MLP")
+    
+    print(f"Loaded robot with {controller_type} controller")
+    
+    return robot_graph, controller_data

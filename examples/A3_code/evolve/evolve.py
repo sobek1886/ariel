@@ -10,16 +10,19 @@ from ariel.utils.tracker import Tracker
 from ariel.body_phenotypes.robogen_lite.constructor import construct_mjspec_from_graph
 from ariel.body_phenotypes.robogen_lite.decoders.hi_prob_decoding import HighProbabilityDecoder
 from ariel.ec.genotypes.nde import NeuralDevelopmentalEncoding
-from examples.A3_code.evolve.fitness import distance_to_target, fitness_function
+from examples.A3_code.evolve.fitness import distance_to_target, fitness_function, olympic_arena_fitness_dense
 
 from examples.A3_code.evolve.config import (
     STATE_FEATURES, HIDDEN_SIZE, HIDDEN_SIZE2, NN_DEPTH,
     NUM_POP, NUM_GENS, TARGET_POS, SPAWN_POS,
     SAVE_PLOTS, SAVE_LOGS, DURATION,
     DEBUG_PROGRESS, GENOTYPE_SIZE, NUM_OF_MODULES,
-    BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE
+    BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE, USE_CPG, CPG_HYBRID
 )
-from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
+from examples.A3_code.evolve.nn import(
+    genome_length, make_controller_from_genome, infer_input_size,
+    cpg_genome_length, hybrid_cpg_genome_length, make_cpg_controller_from_genome  # ADD THESE
+)
 from examples.A3_code.evolve.utils import (
     make_world, plot_fitness,
     plot_best_trajectory, plot_best_fitness_over_time,
@@ -43,6 +46,8 @@ def decode_body(body_genes):
     p_matrices = nde.forward([np.array(v, dtype=np.float32) for v in genotype_vectors])
     hpd = HighProbabilityDecoder(NUM_OF_MODULES)
     return hpd.probability_matrices_to_graph(*p_matrices)
+
+
 
 # ===============================================================
 # DATA CLASSES
@@ -128,6 +133,29 @@ class Robot:
                 f"evaluations={len(self.limb_history)} | "
                 f"disp={self.disp:.1f}")
 
+def adaptive_mutate_robot(bot: Robot, gen: int, max_gens: int):
+    """Decrease mutation as evolution progresses"""
+    progress = gen / max_gens
+    # Start high, decay to 20% of initial
+    current_sigma = MUT_SIGMA * (1.0 - 0.8 * progress)
+    current_indpb = MUT_INDPB * (1.0 - 0.7 * progress)
+    
+    is_mutate = False
+    for i in range(len(bot.body)):
+        if random.random() < current_indpb:
+            bot.body[i] += np.random.normal(0, current_sigma)
+            is_mutate = True
+    
+    for i in range(len(bot.ctrl)):
+        if random.random() < current_indpb:
+            bot.ctrl[i] += np.random.normal(0, current_sigma)
+    
+    if is_mutate:
+        bot.mutation_count += 1
+        bot.update_body()
+    
+    return bot
+
 # ===============================================================
 # SIMULATION
 # ===============================================================
@@ -136,7 +164,7 @@ def run_simulation(ctrl_genes, robot_graph):
     mj.set_mjcb_control(None)
     world = OlympicArena()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
+    world.spawn(core.spec, list(SPAWN_POS))
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
@@ -144,9 +172,20 @@ def run_simulation(ctrl_genes, robot_graph):
 
     num_joints = model.nu
     tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
-    controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
+
+        # Choose controller type based on config
+    if USE_CPG:
+        controller = make_cpg_controller_from_genome(
+            ctrl_genes, num_joints, tracker=tracker, use_hybrid=CPG_HYBRID
+        )
+    else:
+        controller = make_controller_from_genome(
+            ctrl_genes, num_joints, tracker=tracker
+        )
     if controller.tracker is not None:
         controller.tracker.setup(world.spec, data)
+
+
     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
     simple_runner(model, data, duration=DURATION)
     traj = np.array(tracker.history["xpos"][0])
@@ -211,7 +250,7 @@ def evaluate_robot(bot: Robot):
         # Build temporary model to check joint count
         tmp_world = make_world()
         core = construct_mjspec_from_graph(robot_graph)
-        tmp_world.spawn(core.spec, spawn_position=list(SPAWN_POS))
+        tmp_world.spawn(core.spec, list(SPAWN_POS))
         tmp_model = tmp_world.spec.compile()
         num_joints = tmp_model.nu
 
@@ -221,21 +260,30 @@ def evaluate_robot(bot: Robot):
         required_len = genome_length(input_size, HIDDEN_SIZE, num_joints,
                                     depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2)
 
-        # --- DEBUG PRINTS ---
-        # print(f"\n[DEBUG] Robot evaluation info robot: {bot.id}")
-        # print(f"  num_joints = {num_joints}")
-        # print(f"  input_size = {input_size}")
-        # print(f"  required_len = {required_len}")
-        # print(f"  current_ctrl_len = {len(bot.ctrl)}")
-        # print(f"  BODY_GENE_LENGTH = {BODY_GENE_LENGTH}")
-        # print(f"  GENOTYPE_SIZE = {GENOTYPE_SIZE}")
-        # print(f"  NUM_OF_MODULES = {NUM_OF_MODULES}")
+        # Calculate required controller length based on type
+        if USE_CPG:
+            if CPG_HYBRID:
+                required_len = hybrid_cpg_genome_length(num_joints, input_size)
+            else:
+                required_len = cpg_genome_length(num_joints)
+        else:
+            required_len = genome_length(
+                input_size, HIDDEN_SIZE, num_joints,
+                depth=NN_DEPTH, hidden_size2=HIDDEN_SIZE2
+            )
         
         ctrl_genes = bot.ctrl
+        # Resize controller if needed
         if len(bot.ctrl) != required_len:
-            ctrl_genes = [random.uniform(-1.0, 1.0) for _ in range(required_len)]
-            # print(f"  Resized controller = {len(ctrl_genes)}")
-
+            if len(bot.ctrl) < required_len:
+                # Body grew - pad with small random values
+                padding = [random.uniform(-0.1, 0.1) for _ in range(required_len - len(bot.ctrl))]
+                ctrl_genes = bot.ctrl + padding
+            else:
+                # Body shrunk - truncate
+                ctrl_genes = bot.ctrl[:required_len]
+            
+            bot.ctrl = ctrl_genes
         # Simulate
         traj, model, data, tracker = run_simulation(ctrl_genes, robot_graph)
         disp = np.linalg.norm(traj[-1, [0, 1]] - traj[0, [0, 1]])
@@ -245,13 +293,10 @@ def evaluate_robot(bot: Robot):
         
         # Compute fitness
         if disp < IMMOBILE_THRESH:
-            fitness = -999.0  # immobile
+            fitness = -100.0 + (disp * 10.0)
         else:
-            if TASK.lower() == "nav":
-                fitness = distance_to_target(traj)
-            else:
-                fitness = fitness_function(traj)
-
+            # Use forward distance for Olympic Arena race
+            fitness = olympic_arena_fitness_dense(traj)
         # Return all data needed for updating bot in main process
         return {
             'fitness': fitness,
@@ -264,7 +309,7 @@ def evaluate_robot(bot: Robot):
     except Exception as e:
         print(f"[!] Robot evaluation failed: {e}")
         return {
-            'fitness': -999.0,
+            'fitness': -200.0,
             'disp': 0.0,
             'num_joints': None,
             'input_size': None,
@@ -286,6 +331,56 @@ def tap_timer(timer_name: str = "Timer"):
         print(f"[TIMER] {timer_name} timer took: {total_time:.2f} sec")
         del timers[timer_name]  # Reset the timer
 
+def smart_resize_controller(old_ctrl: list, required_len: int, 
+                           old_input_size: int, new_input_size: int,
+                           old_num_joints: int, new_num_joints: int) -> list:
+    """Intelligently resize controller preserving learned patterns"""
+    
+    if len(old_ctrl) == required_len:
+        return old_ctrl
+    
+    # Calculate layer sizes
+    old_w1_size = old_input_size * HIDDEN_SIZE
+    new_w1_size = new_input_size * HIDDEN_SIZE
+    
+    if len(old_ctrl) < required_len:
+        # Body grew - expand strategically
+        new_ctrl = old_ctrl.copy()
+        
+        # Add small noise for new input->hidden weights
+        padding_size = required_len - len(old_ctrl)
+        new_ctrl.extend([random.uniform(-0.05, 0.05) for _ in range(padding_size)])
+        
+    else:
+        # Body shrunk - preserve most important weights
+        new_ctrl = []
+        
+        # Try to preserve center of weight matrices
+        old_w1 = np.array(old_ctrl[:old_w1_size]).reshape(old_input_size, HIDDEN_SIZE)
+        
+        # Keep central features if possible
+        if new_input_size < old_input_size:
+            # Trim from edges
+            trim = (old_input_size - new_input_size) // 2
+            new_w1 = old_w1[trim:trim+new_input_size, :]
+        else:
+            new_w1 = old_w1[:new_input_size, :]
+        
+        new_ctrl.extend(new_w1.flatten().tolist())
+        
+        # Keep rest of network
+        remaining = old_ctrl[old_w1_size:]
+        needed = required_len - len(new_ctrl)
+        new_ctrl.extend(remaining[:needed])
+        
+        # Pad if still short
+        if len(new_ctrl) < required_len:
+            new_ctrl.extend([random.uniform(-0.05, 0.05) 
+                           for _ in range(required_len - len(new_ctrl))])
+    
+    return new_ctrl[:required_len]
+
+
 # ===============================================================
 # MAIN EVOLUTION LOOP
 # ===============================================================
@@ -299,6 +394,8 @@ def run_evolve_robot(
     DATA_PATH.mkdir(parents=True, exist_ok=True)
     plots_dir = DATA_PATH / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
+        # ✓ VERIFY THE FIX WORKS
+        
 
     # --- Initialize population ---
     pop: list[Robot] = []
@@ -308,6 +405,28 @@ def run_evolve_robot(
         bot = Robot(body, ctrl)
         bot.gen_created = 0  # generation 0
         pop.append(bot)
+    # --- Initialize population ---
+    # pop: list[Robot] = []
+    # for i in range(NUM_POP):
+    #     body = [random.uniform(-1, 1) for _ in range(BODY_GENE_LENGTH)]
+        
+    #     # Create a temporary robot to determine required controller size
+    #     temp_bot = Robot(body, [])  # Empty controller initially
+    #     required_ctrl_len = genome_length(
+    #         temp_bot.input_size, 
+    #         HIDDEN_SIZE, 
+    #         temp_bot.num_joints,
+    #         depth=NN_DEPTH, 
+    #         hidden_size2=HIDDEN_SIZE2
+    #     )
+        
+    #     # Now create controller with correct size
+    #     ctrl = [random.uniform(-0.5, 0.5) for _ in range(required_ctrl_len)]
+        
+    #     # Create the actual robot
+    #     bot = Robot(body, ctrl)
+    #     bot.gen_created = 0
+    #     pop.append(bot)
 
     # --- Parallel evaluation setup ---
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", multiprocessing.cpu_count()))
@@ -339,16 +458,18 @@ def run_evolve_robot(
                 bot.ctrl = result['ctrl_genes']  # Update with potentially resized controller
                 bot.record_limb_count(result['num_joints'])
 
-        # Replace immobile robots
+        # Replace failed robots
+        num_replaced = 0
         for i, bot in enumerate(pop):
-            if bot.disp < IMMOBILE_THRESH:
-                old_id = bot.id
+            if bot.fitness[0] <= -150.0:  # Crashed or extremely immobile
                 body = [random.uniform(-1, 1) for _ in range(BODY_GENE_LENGTH)]
                 ctrl = [random.uniform(-1, 1) for _ in range(100)]
                 pop[i] = Robot(body, ctrl)
                 pop[i].gen_created = gen
-                # if DEBUG_PROGRESS:
-                    # print(f"[!] Replacing immobile robot {old_id} with robot {pop[i].id} (disp={bot.disp:.3f})")
+                num_replaced += 1
+
+        if num_replaced > 0:
+            print(f"[!] Replaced {num_replaced}/{NUM_POP} failed robots")
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary start generation ---")
@@ -367,8 +488,8 @@ def run_evolve_robot(
             b1, b2 = selected[i].clone(), selected[min(i + 1, len(selected) - 1)].clone()
             if random.random() < CX_PROB:
                 b1, b2 = crossover_robots(b1, b2)
-            mutate_robot(b1)
-            mutate_robot(b2)
+            adaptive_mutate_robot(b1, gen, NUM_GENS)
+            adaptive_mutate_robot(b2, gen, NUM_GENS)
             next_pop += [b1, b2]
 
         pop = next_pop[:NUM_POP]
