@@ -136,7 +136,7 @@ def run_simulation(ctrl_genes, robot_graph):
     mj.set_mjcb_control(None)
     world = OlympicArena()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
+    world.spawn(core.spec, list(SPAWN_POS))
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
@@ -208,13 +208,7 @@ def evaluate_robot(bot: Robot):
     try:
         robot_graph = bot.body_graph  # use cached graph
 
-        # Build temporary model to check joint count
-        tmp_world = make_world()
-        core = construct_mjspec_from_graph(robot_graph)
-        tmp_world.spawn(core.spec, spawn_position=list(SPAWN_POS))
-        tmp_model = tmp_world.spec.compile()
-        num_joints = tmp_model.nu
-
+        num_joints = count_num_joints(robot_graph)
         input_size = infer_input_size(num_joints, STATE_FEATURES)
 
         # Resize controller if body changed
@@ -422,7 +416,6 @@ def run_evolve_robot(
     print(f"\n\n---------------------------")
 
     # Use cached body_graph for saving
-    traj, model, data, tracker = run_simulation(best_robot.ctrl, best_robot.body_graph)
     save_robot(DATA_PATH, best_robot.body_graph, best_robot.ctrl, input_size=best_robot.input_size, num_joints=best_robot.num_joints)
 
     if SAVE_LOGS:
@@ -444,11 +437,12 @@ def run_evolve_robot(
         plot_best_trajectory(best_robot.ctrl, best_robot.body_graph, plots_dir)
         tap_timer("best_trajectory")
 
-        tap_timer("best_fitness")
+        tap_timer("best_fitness_over_time")
         plot_best_fitness_over_time(best_robot.ctrl, best_robot.body_graph, plots_dir)
-        tap_timer("best_fitness")
+        tap_timer("best_fitness_over_time")
 
 if __name__ == "__main__":
     tap_timer("Total")
     run_evolve_robot()
     tap_timer("Total")
+    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, duration: {DURATION}")

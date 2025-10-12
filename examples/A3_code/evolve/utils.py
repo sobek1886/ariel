@@ -33,7 +33,7 @@ def make_world():
 def run_simulation(genome, robot_graph):
     world = make_world()
     core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, spawn_position=list(SPAWN_POS))
+    world.spawn(core.spec, list(SPAWN_POS))
     model = world.spec.compile()
     data = mj.MjData(model)
     mj.mj_resetData(model, data)
@@ -92,7 +92,7 @@ def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot
     plt.plot(gens, maxv, label="Best Fitness", color='green', linewidth=2, linestyle='--')
     
     # Optionally plot average
-    plt.plot(gens, avg, label="Average Fitness", color='orange', linewidth=1, linestyle=':')
+    # plt.plot(gens, avg, label="Average Fitness", color='orange', linewidth=1, linestyle=':')
     
     plt.xlabel("Generation", fontsize=12)
     plt.ylabel("Fitness", fontsize=12)
@@ -150,7 +150,7 @@ def _plot_curve(x, y, label, color, xlabel, ylabel, title, save_path):
 def compute_all_fitness_curves(traj, step: int = 100):
     """Compute all fitness function values along the trajectory."""
     from examples.A3_code.evolve.fitness import (
-        dist_to_target,
+        # dist_to_target,
         forward_progress_fitness,
         distance_to_target_improved,
         olympic_arena_fitness,
@@ -159,7 +159,7 @@ def compute_all_fitness_curves(traj, step: int = 100):
     
     # Store all fitness values
     all_fitness = {
-        'dist_to_target': [],
+        # 'dist_to_target': [],
         'forward_progress_fitness': [],
         'distance_to_target_improved': [],
         'olympic_arena_fitness': [],
@@ -173,9 +173,9 @@ def compute_all_fitness_curves(traj, step: int = 100):
         timesteps.append(i)
         
         # Compute each fitness function
-        all_fitness['dist_to_target'].append(
-            dist_to_target(partial_traj)
-        )
+        # all_fitness['dist_to_target'].append(
+        #     dist_to_target(partial_traj)
+        # )
         all_fitness['forward_progress_fitness'].append(
             forward_progress_fitness(partial_traj)
         )
@@ -192,7 +192,7 @@ def compute_all_fitness_curves(traj, step: int = 100):
     # Add final point
     if len(traj) - 1 not in timesteps:
         timesteps.append(len(traj) - 1)
-        all_fitness['dist_to_target'].append(dist_to_target(traj))
+        # all_fitness['dist_to_target'].append(dist_to_target(traj))
         all_fitness['forward_progress_fitness'].append(forward_progress_fitness(traj))
         all_fitness['distance_to_target_improved'].append(distance_to_target_improved(traj))
         all_fitness['olympic_arena_fitness'].append(olympic_arena_fitness(traj))
@@ -219,7 +219,7 @@ def plot_best_fitness_over_time(
 
     # Define colors and line styles for each fitness function
     fitness_styles = {
-        'dist_to_target': {'color': 'red', 'linestyle': '-', 'label': 'Simple Distance (Original)'},
+        # 'dist_to_target': {'color': 'red', 'linestyle': '-', 'label': 'Simple Distance (Original)'},
         'forward_progress_fitness': {'color': 'orange', 'linestyle': '--', 'label': 'Forward Progress'},
         'distance_to_target_improved': {'color': 'green', 'linestyle': '-', 'label': 'Dense Improved'},
         'olympic_arena_fitness': {'color': 'purple', 'linestyle': '--', 'label': 'Olympic Arena'},

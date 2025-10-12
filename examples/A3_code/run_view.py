@@ -59,7 +59,7 @@ def show_xpos_history(history: list[float]) -> None:
     single_frame_renderer(
         model,
         data,
-        camera=camera,
+        camera,
         save_path=save_path,
         save=True,
     )
@@ -118,7 +118,9 @@ def show_xpos_history(history: list[float]) -> None:
 def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
     mj.set_mjcb_control(None)
     world = OlympicArena()
-    world.spawn(robot.spec, spawn_position=SPAWN_POS)
+    world.spawn(robot.spec, SPAWN_POS)
+
+    #place ball
 
     model = world.spec.compile()
     data = mj.MjData(model)
@@ -159,7 +161,7 @@ def main() -> None:
     # --- Run experiment ---
     experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
 
-    history = olympic_arena_fitness(tracker.history["xpos"][0])
+    history = tracker.history["xpos"][0]
     show_xpos_history(history)
 
     fitness = olympic_arena_fitness(history)

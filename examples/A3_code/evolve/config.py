@@ -9,16 +9,16 @@ TARGET_POS: Tuple[float, float, float] = (5.0, 0.0, 0.5)
 IMMOBILE_THRESH = 0.1  # meters — below this, the robot is considered immobile
 MUT_SIGMA, MUT_INDPB = 0.2, 0.1
 CX_PROB, MUT_PROB = 0.5, 0.3
-TOURNAMENT_SIZE = 3
+TOURNAMENT_SIZE = 5
 
-DURATION = 10
-NUM_POP = 10
-NUM_GENS = 3
+DURATION = 200
+NUM_POP = 150
+NUM_GENS = 150
 
 STATE_SET = "rich"
 TASK = "nav"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "freddy"
+DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "big_run"
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"
