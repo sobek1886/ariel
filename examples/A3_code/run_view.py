@@ -19,7 +19,7 @@ from ariel.utils.tracker import Tracker
 from ariel.utils.video_recorder import VideoRecorder
 from examples.A3_code.evolve.nn import make_controller_from_weights
 from examples.A3_code.evolve.fitness import olympic_arena_fitness
-from examples.A3_code.evolve.config import DATA_PATH, SPAWN_POS, TARGET_POS, TASK
+from examples.A3_code.evolve.config import DATA_PATH, SPAWN_POS, TARGET_POS
 from examples.A3_code.evolve.utils import load_robot, plot_best_trajectory, plot_best_fitness_over_time
 
 if TYPE_CHECKING:

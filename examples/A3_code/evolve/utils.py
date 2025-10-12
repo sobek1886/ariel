@@ -88,7 +88,7 @@ def save_log_csv(log, csv_path: Path):
 
 
 # === Plotting ===
-def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot_fitness.png", duration=None):
+def plot_fitness(log, dest_dir: Path, pop: int, out_name: str = "plot_fitness.png", duration=None):
     
     gens = [rec["gen"] for rec in log]
     avg  = np.array([rec["avg"] for rec in log])
@@ -114,7 +114,7 @@ def plot_fitness(log, dest_dir: Path, pop: int, task: str, out_name: str = "plot
     
     plt.xlabel("Generation", fontsize=12)
     plt.ylabel("Fitness", fontsize=12)
-    plt.title(f"{task.upper()} Evolution\n(pop={pop}, duration={duration}s", fontsize=12)
+    plt.title(f"Fitness Evolution\n(pop={pop}, duration={duration}s)", fontsize=12)
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     

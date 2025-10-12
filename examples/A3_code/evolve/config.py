@@ -7,12 +7,12 @@ SPAWN_POS: Tuple[float, float, float] = (-0.8, 0.0, 0.1)
 TARGET_POS: Tuple[float, float, float] = (5.0, 0.0, 0.5)
 
 IMMOBILE_THRESH = 0.1  # meters — below this, the robot is considered immobile
-MUT_SIGMA, MUT_INDPB = 0.2, 0.1
+MUT_SIGMA, MUT_INDPB = 0.2, 0.2
 CX_PROB, MUT_PROB = 0.5, 0.3
-TOURNAMENT_SIZE = 5
+TOURNAMENT_SIZE = 7
 
 NUM_POP = 300
-NUM_GENS = 300
+NUM_GENS = 400
 
 # Dynamic duration: start short, increase over time
 BASE_DURATION = 10
@@ -20,9 +20,8 @@ MAX_DURATION = 120
 DURATION_RAMP_GENS = NUM_GENS  # Reach max at generation
 
 STATE_SET = "rich"
-TASK = "nav"
 
-DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "Final_Run_5pm"
+DATA_PATH = Path.cwd() / "__robot_data__" / "saved_robots" / "Final_Run_6pm"
 
 STATE_FEATURES_MINIMAL: Sequence[str] = (
     "joint_pos", "joint_vel", "torso_quat", "torso_vel", "target_dir"

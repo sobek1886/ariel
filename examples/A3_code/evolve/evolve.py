@@ -4,6 +4,7 @@ import random, json, os, time, multiprocessing, string
 import numpy as np
 import mujoco as mj
 import gc
+import torch
 import psutil
 from deap import base, creator, tools
 from ariel.simulation.environments import OlympicArena
@@ -18,7 +19,7 @@ from examples.A3_code.evolve.config import (
     NUM_POP, NUM_GENS, TARGET_POS, SPAWN_POS,
     SAVE_PLOTS, SAVE_LOGS, SAVE_CHECKPOINTS,
     DEBUG_PROGRESS, GENOTYPE_SIZE, NUM_OF_MODULES,
-    BODY_GENE_LENGTH, TASK, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE,
+    BODY_GENE_LENGTH, DATA_PATH, IMMOBILE_THRESH, MUT_INDPB, MUT_SIGMA, CX_PROB, MUT_PROB, TOURNAMENT_SIZE,
     DURATION_RAMP_GENS, MAX_DURATION, BASE_DURATION
 )
 from examples.A3_code.evolve.nn import genome_length, make_controller_from_genome, infer_input_size
@@ -33,6 +34,24 @@ timers = {}
 last_gen_time = 0
 last_gen_dur = 0
 
+def get_global_nde():
+    """
+    Get the singleton NDE instance with fixed weights.
+    This ensures deterministic genotype→phenotype mapping.
+    """
+    if not hasattr(get_global_nde, '_instance'):
+        # Set seed for reproducibility
+        torch.manual_seed(42)
+        np.random.seed(42)
+        
+        # Create NDE once with fixed weights
+        get_global_nde._instance = NeuralDevelopmentalEncoding(
+            number_of_modules=NUM_OF_MODULES
+        )
+        print("[INIT] Created global NDE with fixed weights (seed=42)")
+    
+    return get_global_nde._instance
+
 # ===============================================================
 # HELPERS
 # ===============================================================
@@ -43,7 +62,7 @@ def split_body_genes(flat):
     return [type_vec, conn_vec, rot_vec]
 
 def decode_body(body_genes):
-    nde = NeuralDevelopmentalEncoding(number_of_modules=NUM_OF_MODULES)
+    nde = get_global_nde()
     genotype_vectors = split_body_genes(body_genes)
     p_matrices = nde.forward([np.array(v, dtype=np.float32) for v in genotype_vectors])
     hpd = HighProbabilityDecoder(NUM_OF_MODULES)
@@ -463,7 +482,6 @@ def run_evolve_robot(
                     log,
                     dest_dir=gen_dir,
                     pop=NUM_POP,
-                    task=TASK,
                     out_name=f"fitness_plot_gen_{gen+1}.png",
                     duration=current_duration
                 )
@@ -503,7 +521,6 @@ def run_evolve_robot(
             log,
             dest_dir=DATA_PATH,
             pop=NUM_POP,
-            task=TASK,
             out_name="fitness_plot.png",
             duration=MAX_DURATION
         )

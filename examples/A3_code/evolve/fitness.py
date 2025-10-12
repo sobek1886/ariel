@@ -173,14 +173,14 @@ def distance_to_target_improved(pos_history: List[List[float]]) -> float:
     
     return fitness
 
-
 def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     """
     Specialized fitness for Olympic Arena terrain.
     Terrain: flat (0 to 0.5) → rough (0.5 to 2.5) → uphill (2.5 to 4.4) → flat (4.4 to 5.0)
-    NOW WITH FALL PROTECTION, PROPER 3D DISTANCE, AND SPEED BONUS!
+    NOW WITH FALL PROTECTION, PROPER 3D DISTANCE, SPEED BONUS, AND Y-AXIS GUIDANCE!
     
     Gives extra rewards for passing terrain checkpoints and completing faster.
+    Gently encourages staying near center line (y=0) to avoid falling off edges.
     
     Args:
         pos_history: List of [x, y, z] positions over time
@@ -236,7 +236,29 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
         fitness -= (height_gain - 2.0) * 5.0
     # Negative height_gain already caught by fall penalty
     
-    # 4. Speed bonus
+    # 4. Y-axis centering bonus/penalty (NEW!)
+    # Gently encourage staying near y=0, but allow exploration
+    y_pos = final_pos[1]
+    avg_y_deviation = np.mean([abs(pos[1]) for pos in pos_history])
+    
+    # Soft penalty that grows quadratically (allows small deviations)
+    if abs(y_pos) < 0.5:
+        # Small deviation: small bonus
+        y_bonus = 0.5 * (1.0 - abs(y_pos) / 0.5)
+        fitness += y_bonus
+    elif abs(y_pos) < 1.5:
+        # Medium deviation: no bonus, no penalty (exploration zone)
+        pass
+    else:
+        # Large deviation: gentle penalty (might fall off)
+        y_penalty = (abs(y_pos) - 1.5) * 0.5
+        fitness -= y_penalty
+    
+    # Additional bonus for maintaining good path (not zigzagging)
+    if avg_y_deviation < 0.5:
+        fitness += 1.0  # Bonus for staying on track consistently
+    
+    # 5. Speed bonus
     # Reward reaching the target faster
     if final_dist < 0.5:  # Close to target
         # Bonus inversely proportional to time (fewer timesteps = higher bonus)
@@ -248,16 +270,15 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
             speed_bonus_finish = 30.0 / len(pos_history)
             fitness += speed_bonus_finish
     
-    # 5. Final distance bonus
+    # 6. Final distance bonus
     if final_dist < 0.5:
         fitness += 15.0 * (0.5 - final_dist)  # Big reward for getting very close
     
-    # 6. Completion bonus
+    # 7. Completion bonus
     if final_dist < 0.3:
         fitness += 30.0  # Massive bonus for reaching target
     
     return fitness
-
 
 def hybrid_fitness(pos_history: List[List[float]]) -> float:
     """
