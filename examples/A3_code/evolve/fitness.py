@@ -176,10 +176,11 @@ def distance_to_target_improved(pos_history: List[List[float]]) -> float:
 
 def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     """
-    Specialized fitness for Olympic Arena terrain (flat → rough → uphill).
-    NOW WITH FALL PROTECTION AND PROPER 3D DISTANCE!
+    Specialized fitness for Olympic Arena terrain.
+    Terrain: flat (0 to 0.5) → rough (0.5 to 2.5) → uphill (2.5 to 4.4) → flat (4.4 to 5.0)
+    NOW WITH FALL PROTECTION, PROPER 3D DISTANCE, AND SPEED BONUS!
     
-    Gives extra rewards for passing terrain checkpoints.
+    Gives extra rewards for passing terrain checkpoints and completing faster.
     
     Args:
         pos_history: List of [x, y, z] positions over time
@@ -199,14 +200,15 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     target_pos = np.array(TARGET_POS)
     final_pos = np.array(pos_history[-1])
     
-    # Approximate terrain boundaries (adjust based on actual arena)
-    # Assuming x-axis progression: flat (x < 1), rough (1 < x < 3), uphill (x > 3)
-    FLAT_END = 1.0
-    ROUGH_END = 3.0
+    # Actual terrain boundaries for Olympic Arena
+    FLAT1_END = 0.5      # End of first flat section
+    ROUGH_END = 2.5      # End of rough section
+    UPHILL_END = 4.4     # End of uphill section
+    FLAT2_END = 5.0      # End of final flat section (target area)
     
     fitness = 0.0
     
-    # 1. Base progress reward (FIXED: now uses full 3D distance)
+    # 1. Base progress reward (uses full 3D distance)
     initial_dist = np.linalg.norm(target_pos - start_pos)  # 3D distance
     final_dist = np.linalg.norm(target_pos - final_pos)    # 3D distance
     progress = initial_dist - final_dist
@@ -216,27 +218,41 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     x_pos = final_pos[0]
     
     if x_pos >= start_pos[0]:  # Moving forward
-        if x_pos >= FLAT_END:
-            fitness += 3.0  # Crossed flat section
+        if x_pos >= FLAT1_END:
+            fitness += 2.0  # Crossed first flat section
         if x_pos >= ROUGH_END:
-            fitness += 5.0  # Crossed rough section
-        if x_pos >= target_pos[0] - 0.5:
-            fitness += 10.0  # Almost at finish
+            fitness += 5.0  # Crossed rough section (hardest part)
+        if x_pos >= UPHILL_END:
+            fitness += 8.0  # Made it up the hill!
+        if x_pos >= FLAT2_END - 0.3:
+            fitness += 10.0  # Almost at finish line
     
     # 3. Height bonus (reward for climbing uphill section)
-    # But penalize if height is unreasonable
+    # The uphill section goes from x=2.5 to x=4.4
     height_gain = final_pos[2] - start_pos[2]
-    if 0 <= height_gain <= 1.5:  # Reasonable climbing
-        fitness += height_gain * 2.0
-    elif height_gain > 1.5:  # Too high (possibly exploiting physics)
-        fitness -= (height_gain - 1.5) * 5.0
+    if 0 <= height_gain <= 2.0:  # Reasonable climbing (adjusted for actual hill)
+        fitness += height_gain * 3.0  # Higher reward for climbing
+    elif height_gain > 2.0:  # Too high (possibly exploiting physics)
+        fitness -= (height_gain - 2.0) * 5.0
     # Negative height_gain already caught by fall penalty
     
-    # 4. Final distance bonus
+    # 4. Speed bonus
+    # Reward reaching the target faster
+    if final_dist < 0.5:  # Close to target
+        # Bonus inversely proportional to time (fewer timesteps = higher bonus)
+        speed_bonus = 20.0 / len(pos_history)
+        fitness += speed_bonus
+        
+        # Extra speed bonus for finishing (very close)
+        if final_dist < 0.3:
+            speed_bonus_finish = 30.0 / len(pos_history)
+            fitness += speed_bonus_finish
+    
+    # 5. Final distance bonus
     if final_dist < 0.5:
         fitness += 15.0 * (0.5 - final_dist)  # Big reward for getting very close
     
-    # 5. Completion bonus
+    # 6. Completion bonus
     if final_dist < 0.3:
         fitness += 30.0  # Massive bonus for reaching target
     

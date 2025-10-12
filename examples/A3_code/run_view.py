@@ -147,13 +147,6 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
         type=mj.mjtGeom.mjGEOM_SPHERE,
         )
     world.spec.worldbody.add_site(
-        name="rug_start",
-        pos=[1.5, 0, 0],
-        size=[0.1, 0.1, 0.1],
-        rgba=[1, 0, 0, 1],
-        type=mj.mjtGeom.mjGEOM_SPHERE,
-        )
-    world.spec.worldbody.add_site(
         name="rug_finish",
         pos=[2.5, 0, 0],
         size=[0.1, 0.1, 0.1],
@@ -162,26 +155,18 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
         )
     world.spec.worldbody.add_site(
         name="inc_start",
-        pos=[3.5, 0, 0],
+        pos=[3.5, 0, 0.25],
         size=[0.1, 0.1, 0.1],
-        rgba=[1, 0, 0, 1],
+        rgba=[0, 0, 1, 1],
         type=mj.mjtGeom.mjGEOM_SPHERE,
         )
     world.spec.worldbody.add_site(
         name="inc_finish",
-        pos=[4.5, 0, 0],
+        pos=[4.4, 0, 0.5],
         size=[0.1, 0.1, 0.1],
-        rgba=[1, 0, 0, 1],
+        rgba=[0, 0, 1, 1],
         type=mj.mjtGeom.mjGEOM_SPHERE,
         )
-    world.spec.worldbody.add_site(
-        name="finish_start",
-        pos=[4.7, 0, 0],
-        size=[0.1, 0.1, 0.1],
-        rgba=[1, 0, 0, 1],
-        type=mj.mjtGeom.mjGEOM_SPHERE,
-        )
-    
 
     model = world.spec.compile()
     data = mj.MjData(model)
