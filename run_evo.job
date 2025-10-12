@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --job-name=run_co_evolution_alex
+#SBATCH --partition=gpu_vis
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=72     # use all cores on the node
+#SBATCH --time=4:00:00
+#SBATCH --gpus=1
+#SBATCH --mem=0                   # all RAM on the node
+#SBATCH --output=./slurm_out/run_co_evolution_alex.out
+#SBATCH --error=logs/%x_%j.err
+
+# prevent thread oversubscription inside each process
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+module purge
+
+source .venv/bin/activate
+export PYTHONUNBUFFERED=1
+
+
+uv run -m examples.A3_code.evolve.evolve
+
+echo "Training complete"
