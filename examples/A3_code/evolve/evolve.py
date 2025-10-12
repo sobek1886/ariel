@@ -64,33 +64,27 @@ class Robot:
             self.id = None  # Will be set by clone() method
 
         self.body = body_genes
-        self._body_graph = None  # Lazy load
         self.ctrl = ctrl_genes
-        self.num_joints = None  # Will be set on first body_graph access
-        self.input_size = None  # Will be set on first body_graph access
+        
+        # EAGER LOAD: Decode body immediately
+        self.body_graph = decode_body(body_genes)
+        self.num_joints = count_num_joints(self.body_graph)
+        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
+        
         self.fitness = (-999.0,)
         self.prev_num_joints = None
-        self.limb_history = []  # record num_joints across evaluations
+        self.limb_history = []
         self.mutation_count = 0
-        self.gen_created = 0  # for tracking when it appeared
+        self.gen_created = 0
         self.disp = 0.0
         self.clone_num = 0
 
-    @property
-    def body_graph(self):
-        """Lazy load body graph only when needed."""
-        if self._body_graph is None:
-            self._body_graph = decode_body(self.body)
-            self.num_joints = count_num_joints(self._body_graph)
-            self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
-        return self._body_graph
-
     def update_body(self):
         """Regenerate body graph and resize controller after body mutation."""
-        self._body_graph = None  # Clear cache
-        
-        # Access property to trigger lazy load and update num_joints/input_size
-        _ = self.body_graph  # This updates self.num_joints and self.input_size
+        # Decode body from current genes
+        self.body_graph = decode_body(self.body)
+        self.num_joints = count_num_joints(self.body_graph)
+        self.input_size = infer_input_size(self.num_joints, STATE_FEATURES)
         
         # CRITICAL: Resize controller to match new morphology
         required_len = genome_length(
@@ -122,9 +116,12 @@ class Robot:
         c.mutation_count = self.mutation_count
         c.gen_created = self.gen_created
         c.disp = self.disp
-        c._body_graph = self._body_graph  # Share cached body
+        
+        # Copy the already-computed values (don't re-decode!)
+        c.body_graph = self.body_graph  # Share reference
         c.num_joints = self.num_joints
         c.input_size = self.input_size
+        
         return c
     
     def record_limb_count(self, new_num_joints: int):
@@ -391,8 +388,8 @@ def run_evolve_robot(
 
         # Selection, crossover, mutation
         fits = [bot.fitness[0] for bot in pop]
-        best_idx = np.argmax(fits)
-        best = pop[best_idx].clone()
+        elite_idx = np.argmax(fits)
+        elite = pop[elite_idx].clone()
         selected = tools.selTournament(pop, len(pop), tournsize=TOURNAMENT_SIZE)
 
         next_pop = []
@@ -405,7 +402,7 @@ def run_evolve_robot(
             next_pop += [b1, b2]
 
         pop = next_pop[:NUM_POP]
-        pop[0] = best  # elitism
+        pop[0] = elite  # elitism
 
         if DEBUG_PROGRESS:
             print("\n--- Robot Stats Summary end generation ---")
@@ -421,15 +418,15 @@ def run_evolve_robot(
             chk_pnt_path = DATA_PATH / f"checkpoints"
             chk_pnt_path.mkdir(parents=True, exist_ok=True)
 
-            save_robot(chk_pnt_path, best.body_graph, best.ctrl,
-                        input_size=best.input_size, num_joints=best.num_joints, out=f"robot_gen_{gen+1}.json")
+            save_robot(chk_pnt_path, elite.body_graph, elite.ctrl,
+                        input_size=elite.input_size, num_joints=elite.num_joints, out=f"robot_gen_{gen+1}.json")
             print(f"[CHECKPOINT] Saved at generation {gen+1}")
 
         if SAVE_PLOTS:
             gen_dir = plots_dir / f"generations"
             gen_dir.mkdir(parents=True, exist_ok=True)
 
-            plot_best_trajectory(best.ctrl, best.body_graph, gen_dir, out_name=f"trajectory_{gen}.png", duration=current_duration)
+            plot_best_trajectory(elite.ctrl, elite.body_graph, gen_dir, out_name=f"trajectory_{gen}.png", duration=current_duration)
 
         # Compute statistics (use quartiles for skewed distributions)
         fits_array = np.array([b.fitness[0] for b in pop])
@@ -523,5 +520,6 @@ def run_evolve_robot(
 if __name__ == "__main__":
     tap_timer("Total")
     run_evolve_robot()
+    print()
     tap_timer("Total")
-    print(f"Finished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, max duration: {MAX_DURATION}")
+    print(f"\nFinished evolve, pop: {NUM_POP}, gens: {NUM_GENS}, max duration: {MAX_DURATION}")
