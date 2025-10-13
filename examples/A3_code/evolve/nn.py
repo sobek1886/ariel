@@ -136,7 +136,6 @@ def make_controller_from_genome(
     genome,
     num_joints: int,
     *,
-    target_pos=TARGET_POS,
     record_pos: list[np.ndarray] | None = None,
     ctrl_every: int = 1,
     save_every: int = 1,
@@ -175,7 +174,6 @@ def make_controller_from_weights(
     weights: dict[str, np.ndarray],
     num_joints: int,
     *,
-    target_pos=TARGET_POS,
     record_pos: list[np.ndarray] | None = None,
     ctrl_every: int = 1,
     save_every: int = 1,
@@ -186,27 +184,29 @@ def make_controller_from_weights(
     Make a Controller from saved weight matrices.
     Supports depth=1 (w1,b1,w2,b2) and depth=2 (w1,b1,w2,b2,w3,b3).
     """
-    w1 = weights["w1"]; b1 = weights.get("b1")
-    w2 = weights["w2"]; b2 = weights.get("b2")
-    w3 = weights.get("w3"); b3 = weights.get("b3")
+    # CRITICAL: Convert lists to numpy arrays with correct dtype
+    w1 = np.array(weights["w1"], dtype=np.float32)
+    b1 = np.array(weights["b1"], dtype=np.float32)
+    w2 = np.array(weights["w2"], dtype=np.float32)
+    b2 = np.array(weights["b2"], dtype=np.float32)
+    w3 = np.array(weights["w3"], dtype=np.float32) if "w3" in weights else None
+    b3 = np.array(weights["b3"], dtype=np.float32) if "b3" in weights else None
 
     def _forward(state: np.ndarray) -> np.ndarray:
-        # print(f"state shape: {state.shape}, w1 shape: {w1.shape}")
-        h1 = np.tanh(state @ w1 + (b1 if b1 is not None else 0))
+        # Match the exact logic from build_controller
+        h1 = np.tanh(np.dot(state, w1) + b1)  # Remove None check
         if w3 is None:
-            out = np.tanh(h1 @ w2 + (b2 if b2 is not None else 0))
+            out = np.tanh(np.dot(h1, w2) + b2)
         else:
-            h2 = np.tanh(h1 @ w2 + (b2 if b2 is not None else 0))
-            out = np.tanh(h2 @ w3 + (b3 if b3 is not None else 0))
+            h2 = np.tanh(np.dot(h1, w2) + b2)
+            out = np.tanh(np.dot(h2, w3) + b3)
         return out * (np.pi / 2)
 
     def _callback(model, data):
+        # Remove .copy() to match exactly
         state = get_state_vector(
             data, num_joints, STATE_FEATURES
-        ).astype(np.float32).copy()
-        # print("State vector:", state)
-        # print("infer_input_size:", infer_input_size(num_joints, STATE_FEATURES))
-        # print("actual state length:", len(get_state_vector(data, num_joints, STATE_FEATURES)))
+        ).astype(np.float32)
         if record_pos is not None:
             record_pos.append(data.qpos[:3].copy())
         return _forward(state)
@@ -218,7 +218,6 @@ def make_controller_from_weights(
         alpha=alpha,
         tracker=tracker,
     )
-
     
 def infer_input_size(num_joints: int, features: Iterable[str]) -> int:
     feats = set(features)

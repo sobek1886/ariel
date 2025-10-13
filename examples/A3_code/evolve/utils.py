@@ -134,6 +134,8 @@ def plot_best_trajectory(
     duration=None
 ):
     traj = run_simulation(genome, robot_graph, duration)
+    print(f"    Len of trajectory {len(traj)}")
+    print(f"    before last pos: {traj[-1]}")
     
     # SPEED UP: Subsample trajectory (plot every 10th point)
     traj_subsampled = traj[::10]  # Every 10th point
@@ -143,7 +145,7 @@ def plot_best_trajectory(
     dist_start = np.linalg.norm(start - np.array(TARGET_POS))
     dist_end = np.linalg.norm(end - np.array(TARGET_POS))
     print(f"[DEBUG] trajectory: Path={path_len:.3f}, StartDist={dist_start:.3f}, EndDist={dist_end:.3f}")
-    print(f"Start: {start}, end: {end}")
+    print(f"Plot_best_trajectory Start: {start}, end: {end}")
 
     plt.figure(figsize=(8, 5))
     plt.plot(traj_subsampled[:,0], traj_subsampled[:,1], "b-", label="Trajectory (XY)")
@@ -318,7 +320,7 @@ def plot_best_fitness_over_time(
 
     # 4️⃣ Print final fitness values for comparison
     print("\n" + "="*60)
-    print("FINAL FITNESS VALUES COMPARISON:")
+    print(f"FINAL FITNESS VALUES COMPARISON (dur={duration}):")
     print("="*60)
     for func_name, style in fitness_styles.items():
         final_fitness = all_fitness[func_name][-1]

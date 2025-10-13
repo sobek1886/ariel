@@ -32,6 +32,8 @@ CWD = Path.cwd()
 DATA = CWD / "__data__" / SCRIPT_NAME
 DATA.mkdir(exist_ok=True)
 
+total_time_run = 0
+
 # SPAWN_POS = [-0.8, 0, 0.1]
 # TARGET_POSITION = [5, 0, 0.5]
 
@@ -117,6 +119,7 @@ def show_xpos_history(history: list[float]) -> None:
     # plt.show()
 
 def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode: ViewerTypes = "viewer") -> None:
+    global total_time_run
     mj.set_mjcb_control(None)
     world = OlympicArena()
     world.spawn(robot.spec, SPAWN_POS)
@@ -180,6 +183,7 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
 
     mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
 
+    start_time = time.time()
     match mode:
         case "simple":
             simple_runner(model, data, duration=duration)
@@ -191,9 +195,14 @@ def experiment(robot: Any, weights=None, tracker=None, duration: int = 15, mode:
             video_renderer(model, data, duration=duration, video_recorder=video_recorder)
         case "launcher":
             viewer.launch(model=model, data=data)
+    total_time_run = int(time.time() - start_time)
+    # total_time_run = duration
+    print()
+    print(f"Total time run: {total_time_run}")
+    print()
+
 
 def main() -> None:
-    start_time = time.time()
     # --- Load saved robot graph ---
     robot_graph, controller_weights = load_robot(DATA_PATH)
     core = construct_mjspec_from_graph(robot_graph)
@@ -207,8 +216,10 @@ def main() -> None:
 
     # --- Run experiment ---
     experiment(robot=core, weights=controller_weights, tracker=tracker, mode="launcher")
+    # experiment(robot=core, weights=controller_weights, duration=26, tracker=tracker, mode="simple")
 
-    history = tracker.history["xpos"][0]
+    history = np.array(tracker.history["xpos"][0], dtype=np.float32)
+    print(f"Len of history {len(history)}")
     show_xpos_history(history)
 
     fitness = olympic_arena_fitness(history)
@@ -226,11 +237,11 @@ def main() -> None:
     genome.extend(np.ravel(controller_weights["w3"]))
     genome.extend(controller_weights["b3"])
 
-    total_time_run = int(time.time() - start_time)
     plot_best_trajectory(genome, robot_graph, debug_dir, duration=total_time_run)
     plot_best_fitness_over_time(genome, robot_graph, debug_dir, duration=total_time_run)
 
-    print(f"Last pos: {history[-1]}")
+    print(f"Run_view start_pos: {history[0]}")
+    print(f"Run_view last_pos: {history[-1]}")
 
 if __name__ == "__main__":
     main()
