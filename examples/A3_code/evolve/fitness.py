@@ -216,6 +216,11 @@ def olympic_arena_fitness(pos_history: List[List[float]]) -> float:
     
     # 2. Milestone bonuses for terrain sections
     x_pos = final_pos[0]
+
+    # continuous reward through rough zone
+    if FLAT1_END < x_pos < ROUGH_END:
+        progress_in_rough = (x_pos - FLAT1_END) / (ROUGH_END - FLAT1_END)
+        fitness += 5.0 * progress_in_rough
     
     if x_pos >= start_pos[0]:  # Moving forward
         if x_pos >= FLAT1_END:

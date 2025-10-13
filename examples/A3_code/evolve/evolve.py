@@ -353,7 +353,7 @@ def run_evolve_robot(
     n_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", multiprocessing.cpu_count()))
 
     # CRITICAL: Pool refresh settings
-    POOL_REFRESH_INTERVAL = 10  # Recreate pool every 10 generations
+    POOL_REFRESH_INTERVAL = 1  # Recreate pool every 5 generations
     pool = None
 
     def eval_map(f, items):
@@ -431,21 +431,6 @@ def run_evolve_robot(
 
         gc.collect()
         print_memory_usage(f"Gen {gen+1}")
-        
-        # Save checkpoint every 10 generations
-        if SAVE_CHECKPOINTS:
-            chk_pnt_path = DATA_PATH / f"checkpoints"
-            chk_pnt_path.mkdir(parents=True, exist_ok=True)
-
-            save_robot(chk_pnt_path, elite.body_graph, elite.ctrl,
-                        input_size=elite.input_size, num_joints=elite.num_joints, out=f"robot_gen_{gen+1}.json")
-            print(f"[CHECKPOINT] Saved at generation {gen+1}")
-
-        if SAVE_PLOTS:
-            gen_dir = plots_dir / f"generations"
-            gen_dir.mkdir(parents=True, exist_ok=True)
-
-            plot_best_trajectory(elite.ctrl, elite.body_graph, gen_dir, out_name=f"trajectory_{gen}.png", duration=current_duration)
 
         # Compute statistics (use quartiles for skewed distributions)
         fits_array = np.array([b.fitness[0] for b in pop])
@@ -467,8 +452,9 @@ def run_evolve_robot(
         })
         print(f"Gen {gen + 1}: avg={float(avg_fit):.3f}, median={float(median_fit):.3f}, best={float(best_fit):.3f}")
 
-        if SAVE_PLOTS:
-            if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1 or gen == 0:
+        if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1 or gen == 0:
+
+            if SAVE_PLOTS:
                 csv_path = DATA_PATH / "fitness_log.csv"
 
                 save_log_csv(log, csv_path)
@@ -486,7 +472,22 @@ def run_evolve_robot(
                     duration=current_duration
                 )
 
-            gc.collect()
+            # Save checkpoint every 10 generations
+            if SAVE_CHECKPOINTS:
+                chk_pnt_path = DATA_PATH / f"checkpoints"
+                chk_pnt_path.mkdir(parents=True, exist_ok=True)
+
+                save_robot(chk_pnt_path, elite.body_graph, elite.ctrl,
+                            input_size=elite.input_size, num_joints=elite.num_joints, out=f"robot_gen_{gen+1}.json")
+                print(f"[CHECKPOINT] Saved at generation {gen+1}")
+
+            if SAVE_PLOTS:
+                gen_dir = plots_dir / f"generations"
+                gen_dir.mkdir(parents=True, exist_ok=True)
+
+                plot_best_trajectory(elite.ctrl, elite.body_graph, gen_dir, out_name=f"trajectory_{gen+1}.png", duration=current_duration)
+            
+        gc.collect()
 
         print("\n")
         new_gen_time = tap_timer("one generation")
