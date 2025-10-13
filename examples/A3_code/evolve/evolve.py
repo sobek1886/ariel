@@ -197,6 +197,7 @@ def mutate_robot(bot: Robot):
     for i in range(len(bot.body)):
         if random.random() < MUT_INDPB:
             bot.body[i] += np.random.normal(0, MUT_SIGMA)
+            bot.body[i] = np.clip(bot.body[i], -1.0, 1.0)
             is_mutate = True
 
     for i in range(len(bot.ctrl)):
