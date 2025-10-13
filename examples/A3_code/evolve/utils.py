@@ -31,36 +31,65 @@ def make_world():
 
 # === Helper: run_simulation (reuses common setup) ===
 def run_simulation(ctrl_genes, robot_graph, duration=None):
-    world = make_world()
-    core = construct_mjspec_from_graph(robot_graph)
-    world.spawn(core.spec, list(SPAWN_POS))
-    model = world.spec.compile()
-    data = mj.MjData(model)
-    mj.mj_resetData(model, data)
-
-    num_joints = model.nu
-    tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
-
-    controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
-    if controller.tracker is not None:
-        controller.tracker.setup(world.spec, data)
-
-    mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
-    simple_runner(model, data, duration=duration)
-
-    # Convert to array ONCE
-    traj = np.array(tracker.history["xpos"][0], dtype=np.float32)
-
-    # CRITICAL: Aggressive cleanup
-    mj.set_mjcb_control(None)
-    tracker.history.clear()  # Clear tracker history
-    del model
-    del data
-    del tracker
-    del controller
-    del world
-    del core
-
+    # Initialize variables for cleanup
+    world = None
+    core = None
+    model = None
+    data = None
+    tracker = None
+    controller = None
+    
+    try:
+        world = make_world()
+        core = construct_mjspec_from_graph(robot_graph)
+        world.spawn(core.spec, list(SPAWN_POS))
+        model = world.spec.compile()
+        data = mj.MjData(model)
+        mj.mj_resetData(model, data)
+        
+        num_joints = model.nu
+        tracker = Tracker(mujoco_obj_to_find=mj.mjtObj.mjOBJ_GEOM, name_to_bind="core")
+        controller = make_controller_from_genome(ctrl_genes, num_joints, tracker=tracker)
+        
+        if controller.tracker is not None:
+            controller.tracker.setup(world.spec, data)
+        
+        mj.set_mjcb_control(lambda m, d: controller.set_control(m, d))
+        
+        # ✅ Check for instability before running
+        mj.mj_forward(model, data)
+        if not np.all(np.isfinite(data.qacc)):
+            raise RuntimeError("Simulation unstable before starting")
+        
+        simple_runner(model, data, duration=duration)
+        
+        # Convert to array
+        traj = np.array(tracker.history["xpos"][0], dtype=np.float32)
+        
+        # ✅ Validate trajectory
+        if not np.all(np.isfinite(traj)):
+            raise RuntimeError("NaN/Inf in trajectory")
+            
+    except Exception as e:
+        print(f"[!] Simulation failed: {e}")
+        # Return minimal valid trajectory (single point at spawn)
+        traj = np.array([list(SPAWN_POS)], dtype=np.float32)
+    
+    finally:
+        # CRITICAL: Aggressive cleanup
+        mj.set_mjcb_control(None)
+        
+        if tracker is not None:
+            tracker.history.clear()
+        
+        # Delete objects in reverse order of creation
+        del controller
+        del tracker
+        del data
+        del model
+        del core
+        del world
+    
     return traj
 
 
