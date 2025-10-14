@@ -454,6 +454,7 @@ def run_evolve_robot(
         print(f"Gen {gen + 1}: avg={float(avg_fit):.3f}, median={float(median_fit):.3f}, best={float(best_fit):.3f}")
 
         if (gen + 1) % 10 == 0 or gen == NUM_GENS - 1 or gen == 0:
+        # if True:
 
             if SAVE_PLOTS:
                 csv_path = DATA_PATH / "fitness_log.csv"
@@ -473,6 +474,8 @@ def run_evolve_robot(
                     duration=current_duration
                 )
 
+                plot_best_fitness_over_time(elite.ctrl, elite.body_graph, gen_dir, out_name=f"fitness_over_time_gen{gen+1}", duration=current_duration)
+
             # Save checkpoint every 10 generations
             if SAVE_CHECKPOINTS:
                 chk_pnt_path = DATA_PATH / f"checkpoints"
@@ -480,7 +483,7 @@ def run_evolve_robot(
 
                 save_robot(chk_pnt_path, elite.body_graph, elite.ctrl,
                             input_size=elite.input_size, num_joints=elite.num_joints, out=f"robot_gen_{gen+1}.json")
-                print(f"[CHECKPOINT] Saved at generation {gen+1}")
+                print(f"[CHECKPOINT] Saved at generation {gen+1} with fitness: {elite.fitness}")
 
             if SAVE_PLOTS:
                 gen_dir = plots_dir / f"generations"
